@@ -12,7 +12,8 @@
  *   tool-result           → dispatcher.emit(tool_end)     [NOT yielded]
  *   error                 → dispatcher.emit(tool_error)   [NOT yielded]
  *   done                  → yield { type: 'done' }
- *   rich-response / trace-meta / compaction → dropped
+ *   trace-meta(routing)   → yield { type: 'model', … }  [names the real model]
+ *   rich-response / compaction → dropped
  *
  * Cancellation: Promise.race with the AbortSignal. Known leak: AgentLoop.run()
  * continues executing in the background (tool calls, SQLite writes) until the
@@ -201,6 +202,22 @@ export class TuiAgentAdapter {
           yieldQueue.push({ type: 'text', value: event.content });
           break;
 
+        // The model that actually answered. Emitted per Brain call, so on a
+        // failover turn the last one wins — which is the model the user's reply
+        // really came from.
+        case 'trace-meta': {
+          const active = event.activeModel;
+          if (active) {
+            const slash = active.indexOf('/');
+            yieldQueue.push({
+              type: 'model',
+              provider: slash > 0 ? active.slice(0, slash) : active,
+              model: slash > 0 ? active.slice(slash + 1) : active,
+            });
+          }
+          break;
+        }
+
         case 'tool-call': {
           const { toolId, name, args } = event;
           lastActiveToolId = toolId;
@@ -254,10 +271,11 @@ export class TuiAgentAdapter {
           break;
         }
 
-        // Dropped — not surfaced in TUI
+        // Dropped — not surfaced in TUI. ('trace-meta' is handled above; leaving
+        // it listed here too would be a dead duplicate case label, which tsc
+        // does not flag.)
         case 'done':
         case 'rich-response':
-        case 'trace-meta':
         case 'compaction':
           break;
       }

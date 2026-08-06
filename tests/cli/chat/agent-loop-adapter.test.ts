@@ -537,3 +537,91 @@ describe('TuiAgentAdapter — run errors', () => {
     expect(chunks[chunks.length - 1]?.type).toBe('done');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Model reporting — the header must name the model that actually answered
+// ---------------------------------------------------------------------------
+
+/**
+ * The TUI header used to be filled from provider.ts's getProviderInfo(), which
+ * resolves an SDK client from whichever local API key is set. That is a
+ * different question from "which model answered": turns are served by
+ * AgentLoop → Brain over its own routing. On a box whose only key was an
+ * exhausted OpenAI one, the header read "OpenAI / gpt-4o-mini" while every turn
+ * was answered over the Claude seat lane. Worse, when NO key was set the
+ * resolution threw and the error screen replaced the entire chat UI — the TUI
+ * was gated on credentials it never used.
+ *
+ * The loop now emits trace-meta{activeModel} (post-aliasing, post-failover) and
+ * the adapter maps it to a ModelChunk. These pin that contract.
+ */
+describe('TuiAgentAdapter — reports the model that actually answered', () => {
+  it('maps trace-meta{activeModel} to a model chunk, splitting provider from model', async () => {
+    const { adapter } = makeAdapter(async (_sid, _msg, onEvent) => {
+      onEvent?.({ type: 'trace-meta', activeModel: 'claude-oauth/claude-opus-5' });
+      return { text: '', attachments: [] };
+    });
+
+    const chunks = await collectChunks(adapter);
+    expect(chunks).toContainEqual({
+      type: 'model',
+      provider: 'claude-oauth',
+      model: 'claude-opus-5',
+    });
+  });
+
+  it('keeps a model id containing slashes intact after the first segment', async () => {
+    const { adapter } = makeAdapter(async (_sid, _msg, onEvent) => {
+      onEvent?.({ type: 'trace-meta', activeModel: 'ollama/library/glm-5.2:cloud' });
+      return { text: '', attachments: [] };
+    });
+
+    const chunks = await collectChunks(adapter);
+    expect(chunks).toContainEqual({
+      type: 'model',
+      provider: 'ollama',
+      model: 'library/glm-5.2:cloud',
+    });
+  });
+
+  it('falls back to the bare string when the model id has no provider prefix', async () => {
+    const { adapter } = makeAdapter(async (_sid, _msg, onEvent) => {
+      onEvent?.({ type: 'trace-meta', activeModel: 'gpt-4o-mini' });
+      return { text: '', attachments: [] };
+    });
+
+    const chunks = await collectChunks(adapter);
+    expect(chunks).toContainEqual({
+      type: 'model',
+      provider: 'gpt-4o-mini',
+      model: 'gpt-4o-mini',
+    });
+  });
+
+  it('emits nothing for a trace-meta carrying no model (skill/complexity traces)', async () => {
+    const { adapter } = makeAdapter(async (_sid, _msg, onEvent) => {
+      onEvent?.({ type: 'trace-meta', skillId: 'some-skill' });
+      return { text: '', attachments: [] };
+    });
+
+    const chunks = await collectChunks(adapter);
+    expect(chunks.filter((c) => c.type === 'model')).toEqual([]);
+  });
+
+  it('on failover the LAST model wins — that is the one that produced the reply', async () => {
+    const { adapter } = makeAdapter(async (_sid, _msg, onEvent) => {
+      onEvent?.({ type: 'trace-meta', activeModel: 'anthropic/claude-opus-5' });
+      onEvent?.({ type: 'trace-meta', activeModel: 'ollama/glm-5.2:cloud' });
+      return { text: '', attachments: [] };
+    });
+
+    const chunks = await collectChunks(adapter);
+    const models = chunks.filter((c) => c.type === 'model');
+    expect(models).toHaveLength(2);
+    expect(models.at(-1)).toEqual({
+      type: 'model',
+      provider: 'ollama',
+      model: 'glm-5.2:cloud',
+    });
+  });
+});

@@ -1,6 +1,6 @@
 {
   "src/cli.ts": 5953,
-  "src/cli/commands/chat/App.tsx": 823,
+  "src/cli/commands/chat/App.tsx": 820,
   "src/cli/commands/doctor.ts": 508,
   "src/cli/commands/setup.tsx": 588,
   "src/cli/index.ts": 657,
