@@ -12,6 +12,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// getProviderApiKey('xai') falls back to the on-disk store
+// <DATA_DIR>/xai-apikey.json when XAI_API_KEY is unset. On a real machine that
+// file exists, so "missing API key -> throw" silently became "key found ->
+// call proceeds" — green on CI's empty checkout, red anywhere with real creds.
+// A transport UNIT test must not consult a live key store at all.
+vi.mock('../../src/llm/xai-apikey-manager.js', () => ({
+  getXaiApiKeyManager: () => ({ getApiKey: () => null, setApiKey: () => {}, clear: () => {} }),
+  __resetXaiApiKeyManager: () => {},
+}));
+
 import type { IRRequest, IRResponse } from '../../shared-types/ir/v1.js';
 import { callIR } from '../../src/llm/transport.js';
 import { LLMPolicyError } from '../../src/llm/errors.js';

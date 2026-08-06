@@ -9,8 +9,20 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { assembleSystemPrompt } from '../../src/core/brain/system-prompt.js';
 import { DAILY_INJECT_CHARS } from '../../src/core/workspace/injector.js';
+import { useIsolatedHome } from '../helpers/isolated-home.js';
+
+// The prompt also injects the LIVE workspace/MEMORY.md. On a real machine that
+// file is far over the 10KB inject cap, so a truncation marker appeared and
+// "nothing was truncated" assertions failed — green on CI's empty checkout,
+// red anywhere with real data. Isolate the home so only this test's inputs
+// reach the prompt. Requires the dynamic import below (paths.ts captures
+// PROJECT_ROOT at module load).
+useIsolatedHome('sudo-prompt-caps-');
+
+const assembleSystemPrompt = async (
+  ...args: Parameters<typeof import('../../src/core/brain/system-prompt.js').assembleSystemPrompt>
+) => (await import('../../src/core/brain/system-prompt.js')).assembleSystemPrompt(...args);
 
 const ENV_KEYS = ['SUDO_INJECT_RECENT_MAX', 'SUDO_INJECT_TODAY_MAX', 'SUDO_INJECT_MEMORY_MAX'];
 const saved: Record<string, string | undefined> = {};
