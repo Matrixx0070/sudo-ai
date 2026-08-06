@@ -3274,13 +3274,17 @@ ${question}`, kb);
   //     opt-in model as Discord/Slack). One shared turn handler serves all
   //     three; the router serializes per chat and contains handler errors.
   // -------------------------------------------------------------------------
+  // ADR 0010 D3 stage 2: derived from the registry rather than restating each
+  // channel's key combination here. These four duplicated the registry's own
+  // requiresAllOf / enableFlag rules — two copies of the same logic is how the
+  // gatewayFinalize expression drifted from the adapter gates in the first
+  // place. (iMessage remains macOS-only + opt-in via SUDO_IMESSAGE_ENABLE; the
+  // adapter self-no-ops off-macOS. That rule now lives in the declaration.)
   const extraChannelEnv = {
-    irc: Boolean(process.env['IRC_SERVER'] && process.env['IRC_NICK']),
-    matrix: Boolean(process.env['MATRIX_HOMESERVER'] && process.env['MATRIX_ACCESS_TOKEN']),
-    signal: Boolean(process.env['SIGNAL_PHONE_NUMBER']),
-    // iMessage is macOS-only + polls chat.db (Full Disk Access); opt-in so it
-    // never auto-starts on the wrong host. The adapter self-no-ops off-macOS.
-    imessage: process.env['SUDO_IMESSAGE_ENABLE'] === '1',
+    irc: channelOn(CHANNEL_DECLS.find((c) => c.id === 'irc')!, process.env),
+    matrix: channelOn(CHANNEL_DECLS.find((c) => c.id === 'matrix')!, process.env),
+    signal: channelOn(CHANNEL_DECLS.find((c) => c.id === 'signal')!, process.env),
+    imessage: channelOn(CHANNEL_DECLS.find((c) => c.id === 'imessage')!, process.env),
   };
   // Gateway finalize — runs when ANY gateway-managed channel is enabled: the
   // extra channels (irc/matrix/signal/imessage) OR Discord/Slack/WhatsApp, which
