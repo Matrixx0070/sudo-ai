@@ -69,6 +69,40 @@ describe('the Discord config lie', () => {
   });
 });
 
+describe('wiring is PINNED — three of nine migrations nearly got it wrong', () => {
+  // Declared wiring per channel. Changing any value here is a real behaviour
+  // change and must be a deliberate, reviewed edit — not a side effect of
+  // copying a neighbouring block. The traps this pins:
+  //   slack        has no setHookEmitter at all
+  //   irc/matrix/signal/imessage  router-only; full wiring would ALSO
+  //               double-register their approval sender (handled by the
+  //               generic router.registeredChannels loop)
+  //   whatsapp    must hand its adapter back — cli.ts's high-crit escalation
+  //               send holds the reference, and losing it fails silently
+  const PINNED: Record<string, string> = {
+    discord: 'full', slack: 'full', email: 'full', sms: 'full',
+    whatsapp: 'full+handle',
+    irc: 'router-only', matrix: 'router-only', signal: 'router-only', imessage: 'router-only',
+  };
+
+  it('every channel declares its wiring', () => {
+    for (const c of GATEWAY_CHANNELS) {
+      expect(c.wiring, `${c.id} must declare how it is wired`).toBeDefined();
+    }
+  });
+
+  it('matches the pinned map', () => {
+    const actual = Object.fromEntries(GATEWAY_CHANNELS.map((c) => [c.id, c.wiring]));
+    expect(actual).toEqual(PINNED);
+  });
+
+  it('every channel that declares wiring also has a start()', () => {
+    for (const c of GATEWAY_CHANNELS) {
+      expect(typeof c.start, `${c.id} declares wiring but cannot start`).toBe('function');
+    }
+  });
+});
+
 describe('resolveTokenEnvKey — adapters need the key NAME the operator used', () => {
   it('returns the spelling that is actually set', () => {
     expect(resolveTokenEnvKey(decl('discord'), env({ DISCORD_BOT_TOKEN: 'x' }))).toBe('DISCORD_BOT_TOKEN');

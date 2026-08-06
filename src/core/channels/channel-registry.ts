@@ -63,6 +63,20 @@ export interface ChannelDeclaration {
   /** Human note for the doctor output. */
   note?: string;
   /**
+   * How this channel is wired once its adapter exists. DECLARED, not implied by
+   * the code inside start(): three of the nine migrations in ADR 0010 D3 stage 2
+   * would have picked the wrong wiring because the inline blocks looked
+   * interchangeable and were not (Slack had no setHookEmitter; irc/matrix/
+   * signal/imessage take router-only registration and full wiring would
+   * double-register their approval sender; WhatsApp must hand its adapter back).
+   * A pinned test asserts this map, so changing a channel's wiring shows up as a
+   * test diff rather than a silent behaviour change.
+   *   'full'         registerOutboundAdapter + hook emitter + approval sender + router
+   *   'router-only'  router registration only
+   *   'full+handle'  full, and returns the adapter for cli.ts to keep
+   */
+  wiring?: 'full' | 'router-only' | 'full+handle';
+  /**
    * Build + wire the adapter. Absent means this channel is still constructed
    * inline in cli.ts — migrated and inline channels coexist so stage 2 can move
    * one channel per PR. Must not throw: a channel failing to start is
@@ -114,6 +128,7 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
   // what the code has always read. Accept both so the documented name works.
   {
     id: 'discord', tokenEnvKeys: ['DISCORD_TOKEN', 'DISCORD_BOT_TOKEN'],
+    wiring: 'full',
     // Takes the resolved key NAME so the documented DISCORD_BOT_TOKEN works —
     // the split between this and the enablement gate is what once let the
     // router start with Discord silently absent (#1090).
@@ -127,6 +142,7 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
   },
   {
     id: 'slack', tokenEnvKeys: ['SLACK_BOT_TOKEN'],
+    wiring: 'full',
     // SlackAdapter reads SLACK_BOT_TOKEN + SLACK_APP_TOKEN from env itself, and
     // has NO setHookEmitter — wireAdapter's optional call is a no-op for it, so
     // migrating adds no hook wiring the inline block did not do.
@@ -138,6 +154,7 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
   },
   {
     id: 'whatsapp', tokenEnvKeys: ['WHATSAPP_TOKEN'], enableFlag: 'SUDO_WHATSAPP_ENABLE',
+    wiring: 'full+handle',
     // RETURNS the adapter: cli.ts keeps a reference for its high-criticality
     // escalation send (maybeGuardedSend / whatsAppAdapter.isConnected). A
     // migration that dropped the return would leave that path permanently
@@ -154,6 +171,7 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
   },
   {
     id: 'email', tokenEnvKeys: ['EMAIL_IMAP_USER'],
+    wiring: 'full',
     // First channel migrated off inline construction (ADR 0010 D3 stage 2).
     // Chosen first because it is the only channel enabled on the prod box, so a
     // regression shows up immediately in the boot log instead of hiding.
@@ -165,6 +183,7 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
   },
   {
     id: 'sms', tokenEnvKeys: ['TWILIO_ACCOUNT_SID'],
+    wiring: 'full',
     async start(deps) {
       const { SmsAdapter } = await import('./sms.js');
       await wireAdapter('sms', new SmsAdapter(), deps);
@@ -172,6 +191,7 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
     },
   },
   { id: 'irc', tokenEnvKeys: ['IRC_SERVER'], requiresAllOf: ['IRC_SERVER', 'IRC_NICK'],
+    wiring: 'router-only',
     async start(deps) {
       const { IRCAdapter } = await import('./irc.js');
       await registerRouterOnly(new IRCAdapter());
@@ -179,6 +199,7 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
     },
   },
   { id: 'matrix', tokenEnvKeys: ['MATRIX_HOMESERVER'], requiresAllOf: ['MATRIX_HOMESERVER', 'MATRIX_ACCESS_TOKEN'],
+    wiring: 'router-only',
     async start(deps) {
       const { MatrixAdapter } = await import('./matrix.js');
       await registerRouterOnly(new MatrixAdapter());
@@ -186,6 +207,7 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
     },
   },
   { id: 'signal', tokenEnvKeys: ['SIGNAL_PHONE_NUMBER'],
+    wiring: 'router-only',
     async start(deps) {
       const { SignalAdapter } = await import('./signal.js');
       await registerRouterOnly(new SignalAdapter());
@@ -194,6 +216,7 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
   },
   {
     id: 'imessage', tokenEnvKeys: [], enableFlag: 'SUDO_IMESSAGE_ENABLE',
+    wiring: 'router-only',
     note: 'macOS-only (polls chat.db, needs Full Disk Access); opt-in so it never auto-starts on the wrong host',
     async start(deps) {
       const { IMessageAdapter } = await import('./imessage-adapter.js');
