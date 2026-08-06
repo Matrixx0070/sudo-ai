@@ -189,3 +189,8 @@ brain-enc.key
 !scripts/grok-web/*.py
 # gemini-web gpsoauth mint bridge (curl_cffi python; not a secret)
 !scripts/gemini-web/*.py
+
+# Python bytecode — never source. NB: line ~81 ignores *.py with negations
+# re-including vendored script trees; these two rules must not disturb that.
+__pycache__/
+*.pyc
