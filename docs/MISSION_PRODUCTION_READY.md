@@ -85,3 +85,48 @@ scaffolding sweep. Check `gh pr list` for their state before starting anything.
    under long-running commands.
 5. Update the VERIFIED STATE table above when you measure something new — especially when
    it contradicts what is written here.
+
+---
+
+## INCIDENT LOG
+
+### 2026-08-06 — a test overwrote the live secrets file (caught pre-merge)
+
+`tests/cli/chat/provider-dotenv.test.ts` (added by an agent on PR #1110) computed
+`path.join(process.cwd(),'config','.env')` and, **at module scope**, read that file into
+memory then overwrote it, restoring only in `afterAll`. In a worktree `config/.env` is
+absent so it looked harmless; in the main checkout it is a 10,659-byte 0600 file with 241
+lines of live credentials the prod pm2 process reads. Any interruption between write and
+`afterAll` would have left it truncated with **no on-disk backup**. Several parallel
+workflow waves were running vitest at the time.
+
+Resolved: test deleted (`1c5523ca`). `config/.env` verified intact and backed up to
+`/root/.env.backup-1786024871` (0600).
+
+**Found by an adversarial reviewer — not by the author, not by CI.** Green CI does not
+mean a diff is safe to run. This is the strongest argument for keeping the review lenses
+on every wave.
+
+**Standing rule:** no test may read or write a real credential file. If exercising a
+module-private loader requires the real path, export the loader or inject the path —
+change the code under test, never point a test at production state.
+
+## WAVE STATUS (update as waves land)
+
+| wave | tasks | outcome |
+|---|---|---|
+| 1 | revert scoping, identity root, browser profiles | PRs #1106/#1107/#1108 — 2 REJECT, rest CONCERNS. **None mergeable.** Reworked in wave 4. |
+| 2 | dead SDK path, worktree isolation, gitignore | PRs #1110/#1109/#1111 — 7 of 9 lenses CONCERNS. #1111 is strongest (CI green, 79 .py identical). **None merged.** |
+| 3 | argv-exec hardening, OpenClaw ADR 0012, scaffolding sweep | in flight |
+| 4 | rework of #1106/#1107/#1108 | in flight |
+
+### Carried forward (owned by nobody yet)
+- `orchestrator.ts` still runs `git checkout -- .` and `git commit` in the **shared live
+  checkout**. Wave 2 fixed only `auto-fix-trigger.ts`; the seam (`withAutoFixWorktree()`)
+  now exists, so applying it is mechanical once the file is free.
+- The auto-fix flow is **non-functional in production regardless**: `_triggerFix` opens a
+  PR on a branch with zero commits and no push, so `gh pr create` fails. Pre-existing.
+- PR #1109's advertised concurrency guard **does not work** (two reviewers measured it).
+- PR #1111's new test breaks `check:arch` on developer machines; `docs/OPUS_HANDOFF_CAS_WIRING.md:222`
+  still instructs contributors to use the removed `*.py` pattern.
+- 5 `@ai-sdk/*` packages sit in `dependencies` imported by zero shipped code → `devDependencies`.
