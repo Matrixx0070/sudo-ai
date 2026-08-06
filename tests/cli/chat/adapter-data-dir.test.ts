@@ -34,7 +34,7 @@ function capturedDataDirAfterImporting(target: string): string {
     })();
   `;
   const out = execFileSync('npx', ['tsx', '-e', script], {
-    cwd: process.cwd(), encoding: 'utf8', timeout: 120_000,
+    cwd: process.cwd(), encoding: 'utf8', timeout: 25_000,
   });
   return (out.match(/RESULT:(.*)$/m)?.[1] ?? '').trim();
 }
@@ -47,7 +47,7 @@ describe('TUI adapter pre-captures the owner DATA_DIR', () => {
     expect(captured, 'adapter must import paths.js so credentials never follow the private state dir')
       .not.toContain('SENTINEL');
     expect(captured).toBe(`${process.cwd()}/data`);
-  }, 180_000);
+  }, 30_000);
 
   it('the runtime guard THROWS if identity ever equals the private state dir', () => {
     // Simulate the failure: force paths.ts to capture the TUI's own state dir,
@@ -66,11 +66,11 @@ describe('TUI adapter pre-captures the owner DATA_DIR', () => {
       })();
     `.replace('PLACEHOLDER', tuiDir);
     const out = execFileSync('npx', ['tsx', '-e', script], {
-      cwd: process.cwd(), encoding: 'utf8', timeout: 180_000,
+      cwd: process.cwd(), encoding: 'utf8', timeout: 25_000,
     });
     expect(out).toContain('THREW:');
     expect(out).toContain('identity root was not captured');
-  }, 240_000);
+  }, 30_000);
 
   it('the protocol discriminates — a module that does NOT load paths.js lets the sentinel win', () => {
     // dispatcher.js is a pure in-process event bus with no paths.js dependency.
@@ -79,5 +79,5 @@ describe('TUI adapter pre-captures the owner DATA_DIR', () => {
     );
     expect(captured, 'if this stops showing the sentinel the test proves nothing')
       .toContain('SENTINEL');
-  }, 180_000);
+  }, 30_000);
 });
