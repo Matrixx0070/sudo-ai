@@ -88,8 +88,24 @@ export interface ToolPermissionChunk {
   args: string;
 }
 
+/**
+ * The model that ACTUALLY served the turn, from the agent loop's routing trace.
+ *
+ * The header must render this rather than {@link getProviderInfo}, which only
+ * reports which API key happens to be present on this machine — a value with no
+ * connection to the model the Brain used. On a box whose only key was an
+ * exhausted OpenAI one, the header read "OpenAI / gpt-4o-mini" while every turn
+ * was in fact answered over the Claude seat lane.
+ */
+export interface ModelChunk {
+  type: 'model';
+  provider: string;
+  model: string;
+}
+
 export type ProviderChunk = StreamChunk | DoneChunk
-  | ToolStartChunk | ToolEndChunk | ToolErrorChunk | ToolPermissionChunk;
+  | ToolStartChunk | ToolEndChunk | ToolErrorChunk | ToolPermissionChunk
+  | ModelChunk;
 
 export interface ProviderInfo {
   provider: ProviderKind;

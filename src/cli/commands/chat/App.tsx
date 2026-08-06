@@ -26,9 +26,10 @@ import { AlignmentModal } from './components/AlignmentModal.js';
 import { FederationModal } from './components/FederationModal.js';
 import { SkillPicker } from './components/SkillPicker.js';
 
+// NB: provider.ts's chatStream/getProviderInfo are deliberately NOT imported —
+// they resolve an SDK client from local API keys, which is not how turns are
+// served (AgentLoop → Brain). Only the shared types and the default prompt.
 import {
-  chatStream,
-  getProviderInfo,
   DEFAULT_SYSTEM,
   type ChatMessage,
   type ProviderInfo,
@@ -75,13 +76,14 @@ export const App: React.FC = () => {
   const chatPhase = appPhase === 'splash' ? null : (appPhase as ChatPhase);
   const phaseRef = useRef<ChatPhase>({ tag: 'idle' });
 
-  // Provider info
+  // Provider info. Placeholder until the first turn reports the model that
+  // actually answered (ModelChunk); turns are served by the AgentLoop/Brain, so
+  // local API keys do not determine this and must never be shown as if they did.
   const [providerInfo, setProviderInfo] = useState<ProviderInfo>({
     provider: 'anthropic',
-    model: 'claude-sonnet-4-6',
-    label: 'Anthropic',
+    model: '…',
+    label: 'resolving',
   });
-  const [providerError, setProviderError] = useState<string | null>(null);
 
   // Messages
   const [messages, setMessages] = useState<MessageType[]>([]);
@@ -165,14 +167,11 @@ export const App: React.FC = () => {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    void getProviderInfo().then(info => {
-      setProviderInfo(info);
-      setModel(info.model);
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      setProviderError(msg);
-    });
-
+    // No provider probe here on purpose. Turns are served by the AgentLoop over
+    // the Brain's own routing, so resolving a local SDK client told us only
+    // which API key was present — a different question, and one whose failure
+    // used to blank the whole UI behind a "No API key found" screen even though
+    // chat worked. The header now fills in from the first ModelChunk instead.
     const timer = setTimeout(() => {
       setChatPhase({ tag: 'idle' });
     }, 120);
@@ -582,6 +581,15 @@ export const App: React.FC = () => {
           setMessages(prev => prev.map(m =>
             m.id === assistantId ? { ...m, content: text } : m
           ));
+        } else if (chunk.type === 'model') {
+          // Authoritative: the model that actually answered. Arrives per Brain
+          // call, so on a failover turn the last one wins.
+          setProviderInfo({
+            provider: chunk.provider as ProviderInfo['provider'],
+            model: chunk.model,
+            label: chunk.provider,
+          });
+          setModel(chunk.model);
         } else if (chunk.type === 'done') {
           if (chunk.usage) {
             const total = (chunk.usage.inputTokens ?? 0) + (chunk.usage.outputTokens ?? 0);
@@ -655,17 +663,6 @@ export const App: React.FC = () => {
       <Box paddingLeft={2}>
         <Text color="#e8b860" bold>sudo</Text>
         <Text dimColor> · ready.</Text>
-      </Box>
-    );
-  }
-
-  if (providerError) {
-    return (
-      <Box flexDirection="column" paddingLeft={2}>
-        <Text color="red" bold>Error: {providerError}</Text>
-        <Text dimColor>
-          Set one of: ANTHROPIC_API_KEY, OLLAMA_URL, OPENAI_API_KEY, XAI_API_KEY
-        </Text>
       </Box>
     );
   }

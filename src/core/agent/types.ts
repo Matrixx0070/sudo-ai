@@ -93,7 +93,15 @@ export type AgentEvent =
   // APPEND ONLY — do not modify existing variants above.
   | { type: 'trace-meta'; skillId?: string; skillSource?: string; skillKind?: string;
       complexity?: import('../shared/wave10-types.js').ComplexityResult;
-      taint?: import('../shared/wave10-types.js').Taint };
+      taint?: import('../shared/wave10-types.js').Taint;
+      /**
+       * Provider-qualified model that ACTUALLY answered this step, after
+       * aliasing and any failover. Surfaced so a UI can name the real model
+       * instead of inferring one: the TUI header used to report whichever API
+       * key happened to be set locally, which had nothing to do with the model
+       * that served the turn.
+       */
+      activeModel?: string };
 
 /** Callback invoked by the agent loop for each emitted event. */
 export type AgentEventHandler = (event: AgentEvent) => void;

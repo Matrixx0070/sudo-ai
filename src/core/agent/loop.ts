@@ -2716,6 +2716,7 @@ export class AgentLoop extends AgentLoopInjections {
           throw brainErr;
         }
 
+        if (response.model) emit({ type: 'trace-meta', activeModel: response.model });
         log.info(
           {
             sessionId: state.sessionId,

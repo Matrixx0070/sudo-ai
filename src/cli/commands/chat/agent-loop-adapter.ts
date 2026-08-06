@@ -12,7 +12,8 @@
  *   tool-result           → dispatcher.emit(tool_end)     [NOT yielded]
  *   error                 → dispatcher.emit(tool_error)   [NOT yielded]
  *   done                  → yield { type: 'done' }
- *   rich-response / trace-meta / compaction → dropped
+ *   trace-meta(routing)   → yield { type: 'model', … }  [names the real model]
+ *   rich-response / compaction → dropped
  *
  * Cancellation: Promise.race with the AbortSignal. Known leak: AgentLoop.run()
  * continues executing in the background (tool calls, SQLite writes) until the
@@ -21,6 +22,17 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
+// Load-bearing: importing paths.js HERE captures the owner's real DATA_DIR at
+// module load, BEFORE _bootstrap() reassigns process.env['DATA_DIR'] below.
+// paths.js caches DATA_DIR at first import, and credential stores resolve
+// through it (`<DATA_DIR>/claude-oauth.json`), so if this module were the first
+// to pull paths.js the tokens would resolve inside the TUI's private state dir
+// — where a stale copy silently served turns from an 18-day-expired token.
+// This used to work only because App.tsx imports provider.js (which reaches
+// paths.js) first; that guarantee hung on one value import and is not a
+// contract anyone could see. Pinned by tests/cli/chat/adapter-data-dir.test.ts,
+// and enforced at runtime by the invariant check in _bootstrap().
+import { DATA_DIR as OWNER_DATA_DIR } from '../../../core/shared/paths.js';
 import type { ProviderChunk } from './provider.js';
 import { dispatcher } from './dispatcher.js';
 import { toolNameToGerund } from './components/GerundSpinner.js';
@@ -78,6 +90,20 @@ export class TuiAgentAdapter {
 
     // Set DATA_DIR before constructing AgentLoop so all sub-modules that read it
     // (AuditTrail, VetoOverrideStore, TrustTierTracker, etc.) use the TUI-private path.
+    // Enforce the split rather than assume it. This both keeps the paths.js
+    // import load-bearing (it cannot be elided as unused) and converts the
+    // failure mode from silent to loud: if identity ever resolved to the
+    // private state dir, credentials would come from a stale copy and the agent
+    // would quietly answer on the wrong lane instead of erroring.
+    if (!OWNER_DATA_DIR || path.resolve(OWNER_DATA_DIR) === path.resolve(tuiDataDir)) {
+      throw new Error(
+        `TUI bootstrap: identity root was not captured before state isolation ` +
+        `(identity=${OWNER_DATA_DIR}, state=${tuiDataDir}). Credentials resolve ` +
+        `through paths.ts DATA_DIR, which caches at first import — something now ` +
+        `loads paths.ts after this module sets DATA_DIR. See ` +
+        `tests/cli/chat/adapter-data-dir.test.ts.`,
+      );
+    }
     process.env['DATA_DIR'] = tuiDataDir;
 
     // --- Config ---
@@ -201,6 +227,22 @@ export class TuiAgentAdapter {
           yieldQueue.push({ type: 'text', value: event.content });
           break;
 
+        // The model that actually answered. Emitted per Brain call, so on a
+        // failover turn the last one wins — which is the model the user's reply
+        // really came from.
+        case 'trace-meta': {
+          const active = event.activeModel;
+          if (active) {
+            const slash = active.indexOf('/');
+            yieldQueue.push({
+              type: 'model',
+              provider: slash > 0 ? active.slice(0, slash) : active,
+              model: slash > 0 ? active.slice(slash + 1) : active,
+            });
+          }
+          break;
+        }
+
         case 'tool-call': {
           const { toolId, name, args } = event;
           lastActiveToolId = toolId;
@@ -254,10 +296,11 @@ export class TuiAgentAdapter {
           break;
         }
 
-        // Dropped — not surfaced in TUI
+        // Dropped — not surfaced in TUI. ('trace-meta' is handled above; leaving
+        // it listed here too would be a dead duplicate case label, which tsc
+        // does not flag.)
         case 'done':
         case 'rich-response':
-        case 'trace-meta':
         case 'compaction':
           break;
       }
