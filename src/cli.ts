@@ -2869,14 +2869,22 @@ ${question}`, kb);
   // -------------------------------------------------------------------------
   // 7.1 Discord channel adapter (conditional)
   // -------------------------------------------------------------------------
-  if (process.env['DISCORD_TOKEN']) {
+  // ADR 0010 D3: enablement comes from the registry, and the adapter is told
+  // WHICH token key the operator actually set. Gating on DISCORD_TOKEN alone
+  // meant the documented DISCORD_BOT_TOKEN passed gatewayFinalize (stage 1) but
+  // built no adapter — the router would start with Discord silently absent.
+  const { GATEWAY_CHANNELS: CHANNEL_DECLS, isChannelEnabled: channelOn, resolveTokenEnvKey } =
+    await import('./core/channels/channel-registry.js');
+  const discordDecl = CHANNEL_DECLS.find((c) => c.id === 'discord')!;
+  if (channelOn(discordDecl, process.env)) {
     try {
       const { DiscordAdapter } = await import('./core/channels/discord.js');
 
       const discordAllowedChannels = (process.env['DISCORD_ALLOWED_CHANNELS'] ?? '')
         .split(',').map((s) => s.trim()).filter(Boolean);
 
-      const discord = new DiscordAdapter('DISCORD_TOKEN', discordAllowedChannels);
+      const discordTokenKey = resolveTokenEnvKey(discordDecl, process.env) ?? 'DISCORD_TOKEN';
+      const discord = new DiscordAdapter(discordTokenKey, discordAllowedChannels);
       registerOutboundAdapter(discord);
       discord.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('discord', discord);
 
