@@ -2920,23 +2920,10 @@ ${question}`, kb);
   // 7.2 Slack channel adapter (conditional)
   // -------------------------------------------------------------------------
   // ADR 0010 D3 stage 2: enablement from the registry, not raw env.
-  if (channelOn(CHANNEL_DECLS.find((c) => c.id === 'slack')!, process.env)) {
+  const slackDecl = CHANNEL_DECLS.find((c) => c.id === 'slack')!;
+  if (channelOn(slackDecl, process.env)) {
     try {
-      const { SlackAdapter } = await import('./core/channels/slack.js');
-
-      // SlackAdapter reads SLACK_BOT_TOKEN and SLACK_APP_TOKEN from env internally.
-      const slack = new SlackAdapter();
-      registerOutboundAdapter(slack);
-      if (chatApprovals) approvalManager.registerSender('slack', slack);
-
-      // Feature 1 — register Slack FULLY on the shared gateway router (see Discord).
-      {
-        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
-        const gw = getGlobalMessageRouter() ?? new MessageRouter();
-        setGlobalMessageRouter(gw);
-        gw.registerAdapter(slack);
-      }
-      log.info('Slack registered on gateway router (started at gateway finalize)');
+      await slackDecl.start?.(channelRuntimeDeps, resolveTokenEnvKey(slackDecl, process.env));
     } catch (err) {
       log.warn({ err: String(err) }, 'Slack adapter failed to start (non-fatal)');
     }
