@@ -32,6 +32,7 @@ import {
   type ProfileTrust,
 } from './profile-registry.js';
 import { checkOwnerAllowed, browserAudit } from './safety.js';
+import { resolveLaunchProfileDir, removeForkedProfile } from './profile-lock.js';
 
 const log = createLogger('browser-manager');
 
@@ -67,6 +68,9 @@ export interface BrowserInstance {
   ephemeral?: boolean;
   /** Whether this instance is CDP-connected (external browser we must not wipe/kill). */
   cdp?: boolean;
+  /** True when the requested profile was locked by another live process and this
+   *  instance runs on a per-process fork of it (FRESH cookies, wiped on close). */
+  forked?: boolean;
   /** Display mode this instance was ACTUALLY launched with. A cached instance
    *  whose mode differs from a new request must be relaunched, never reused —
    *  silently returning a headless context for a headed request made the
@@ -287,9 +291,16 @@ export class BrowserManager {
       const stale = resolveProfileDir(name, this.profilesRoot);
       if (existsSync(stale)) { try { rmSync(stale, { recursive: true, force: true }); } catch { /* best-effort */ } }
     }
-    const userDataDir = ensureProfileDir(name, this.profilesRoot); // 0700
+    const requestedDir = ensureProfileDir(name, this.profilesRoot); // 0700
 
-    log.info({ name, userDataDir, headless, ephemeral: entry.ephemeral, trust: entry.trust }, 'Launching persistent browser profile');
+    // Cross-PROCESS collision: Chromium's ProcessSingleton aborts the launch
+    // when another LIVE process holds this userDataDir (the daemon holds
+    // "default", so the TUI / bench / sandbox / tests all died here). Fork to a
+    // per-process sibling instead of aborting. A STALE lock (owner gone) is
+    // cleared and the real profile reused — never forked around.
+    const { dir: userDataDir, forked } = resolveLaunchProfileDir(requestedDir);
+
+    log.info({ name, userDataDir, forked, headless, ephemeral: entry.ephemeral, trust: entry.trust }, 'Launching persistent browser profile');
 
     // Detect Chromium version once for UA/CH-header accuracy
     const chromiumVersion = await getCachedChromiumVersion();
@@ -338,6 +349,7 @@ export class BrowserManager {
       ownerOnly: entry.ownerOnly,
       ephemeral: entry.ephemeral,
       headless,
+      forked,
     };
 
     this.instances.set(name, instance);
@@ -413,6 +425,11 @@ export class BrowserManager {
       } catch (err) {
         log.warn({ name, err: String(err) }, 'Ephemeral wipe failed');
       }
+    }
+
+    // A per-process fork is throwaway state — never let it accumulate on disk.
+    if (instance.forked && !instance.cdp && removeForkedProfile(instance.profileDir)) {
+      log.info({ name, profileDir: instance.profileDir }, 'Forked profile removed on close');
     }
 
     log.info({ name }, 'Browser closed');
@@ -633,9 +650,12 @@ export const browserManagerTool: ToolDefinition = {
         // Report the mode the instance is ACTUALLY in, never the requested one —
         // an echoed request parameter is not evidence the window exists.
         const actualHeadless = instance.cdp ? headless : (instance.headless ?? headless);
-        const modeNote = actualHeadless === headless
+        const modeNote = (actualHeadless === headless
           ? ''
-          : ` (NOTE: requested headless=${headless} but instance is headless=${actualHeadless})`;
+          : ` (NOTE: requested headless=${headless} but instance is headless=${actualHeadless})`)
+          + (instance.forked
+            ? ' (NOTE: profile was locked by another live process — running on a per-process FORK with a fresh cookie jar; existing logins are NOT available)'
+            : '');
         return {
           success: true,
           output:
@@ -645,6 +665,7 @@ export const browserManagerTool: ToolDefinition = {
             name, profileDir: instance.profileDir, headless: actualHeadless,
             requestedHeadless: headless, autoRestart,
             trust: instance.trust, ownerOnly: instance.ownerOnly, ephemeral: instance.ephemeral,
+            forked: instance.forked === true,
           },
         };
       }
