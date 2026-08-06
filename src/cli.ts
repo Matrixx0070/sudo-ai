@@ -2887,28 +2887,7 @@ ${question}`, kb);
   };
   if (channelOn(discordDecl, process.env)) {
     try {
-      const { DiscordAdapter } = await import('./core/channels/discord.js');
-
-      const discordAllowedChannels = (process.env['DISCORD_ALLOWED_CHANNELS'] ?? '')
-        .split(',').map((s) => s.trim()).filter(Boolean);
-
-      const discordTokenKey = resolveTokenEnvKey(discordDecl, process.env) ?? 'DISCORD_TOKEN';
-      const discord = new DiscordAdapter(discordTokenKey, discordAllowedChannels);
-      registerOutboundAdapter(discord);
-      discord.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('discord', discord);
-
-      // Feature 1 — register Discord FULLY on the shared gateway router: inbound
-      // flows through the router's ONE handler + preDispatchInterceptor
-      // (approval-consume + slash-directive) + access policy, and it gets the
-      // crash-supervisor + channel.health. The gateway-finalize block below sets
-      // the handler/policy and calls startAll() (which starts this adapter).
-      {
-        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
-        const gw = getGlobalMessageRouter() ?? new MessageRouter();
-        setGlobalMessageRouter(gw);
-        gw.registerAdapter(discord);
-      }
-      log.info('Discord registered on gateway router (started at gateway finalize)');
+      await discordDecl.start?.(channelRuntimeDeps, resolveTokenEnvKey(discordDecl, process.env));
     } catch (err) {
       log.warn({ err: String(err) }, 'Discord adapter failed to start (non-fatal)');
     }
@@ -2950,27 +2929,10 @@ ${question}`, kb);
         "may get your number banned. You are responsible for compliant, consented use.",
     );
     try {
-      const { WhatsAppAdapter } = await import('./core/channels/whatsapp.js');
-
-      const whatsAppAllowedJids = (process.env['WHATSAPP_ALLOWED_JIDS'] ?? '')
-        .split(',').map((s) => s.trim()).filter(Boolean);
-
-      const whatsapp = new WhatsAppAdapter(undefined, whatsAppAllowedJids);
-      registerOutboundAdapter(whatsapp);
-      whatsapp.setHookEmitter(hooks);
-      whatsAppAdapter = whatsapp;
-      if (chatApprovals) approvalManager.registerSender('whatsapp', whatsapp);
-
-      // Feature 1 — register WhatsApp FULLY on the shared gateway router (see
-      // Discord). Its outbound guard (maybeGuardedSend) is preserved by the
-      // gateway-finalize handler's per-channel send branch below.
-      {
-        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
-        const gw = getGlobalMessageRouter() ?? new MessageRouter();
-        setGlobalMessageRouter(gw);
-        gw.registerAdapter(whatsapp);
-      }
-      log.info('WhatsApp registered on gateway router (started at gateway finalize)');
+      const waDecl = CHANNEL_DECLS.find((c) => c.id === 'whatsapp')!;
+      // Keep the reference: the high-crit escalation path below sends through it.
+      whatsAppAdapter = (await waDecl.start?.(channelRuntimeDeps, null) ?? null) as
+        import('./core/channels/whatsapp.js').WhatsAppAdapter | null;
     } catch (err) {
       log.warn({ err: String(err) }, 'WhatsApp adapter failed to start (non-fatal)');
     }

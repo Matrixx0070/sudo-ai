@@ -68,7 +68,7 @@ export interface ChannelDeclaration {
    * one channel per PR. Must not throw: a channel failing to start is
    * non-fatal, exactly as the inline blocks treated it.
    */
-  start?(deps: ChannelRuntimeDeps, tokenEnvKey: string | null): Promise<void>;
+  start?(deps: ChannelRuntimeDeps, tokenEnvKey: string | null): Promise<ChannelAdapter | void>;
 }
 
 /**
@@ -112,7 +112,19 @@ async function wireAdapter(
 export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
   // DISCORD_BOT_TOKEN is what config/sudo-ai.json5 documents; DISCORD_TOKEN is
   // what the code has always read. Accept both so the documented name works.
-  { id: 'discord', tokenEnvKeys: ['DISCORD_TOKEN', 'DISCORD_BOT_TOKEN'] },
+  {
+    id: 'discord', tokenEnvKeys: ['DISCORD_TOKEN', 'DISCORD_BOT_TOKEN'],
+    // Takes the resolved key NAME so the documented DISCORD_BOT_TOKEN works —
+    // the split between this and the enablement gate is what once let the
+    // router start with Discord silently absent (#1090).
+    async start(deps, tokenEnvKey) {
+      const { DiscordAdapter } = await import('./discord.js');
+      const allowed = (process.env['DISCORD_ALLOWED_CHANNELS'] ?? '')
+        .split(',').map((v) => v.trim()).filter(Boolean);
+      await wireAdapter('discord', new DiscordAdapter(tokenEnvKey ?? 'DISCORD_TOKEN', allowed), deps);
+      deps.log.info('Discord registered on gateway router (started at gateway finalize)');
+    },
+  },
   {
     id: 'slack', tokenEnvKeys: ['SLACK_BOT_TOKEN'],
     // SlackAdapter reads SLACK_BOT_TOKEN + SLACK_APP_TOKEN from env itself, and
@@ -124,7 +136,22 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
       deps.log.info('Slack registered on gateway router (started at gateway finalize)');
     },
   },
-  { id: 'whatsapp', tokenEnvKeys: ['WHATSAPP_TOKEN'], enableFlag: 'SUDO_WHATSAPP_ENABLE' },
+  {
+    id: 'whatsapp', tokenEnvKeys: ['WHATSAPP_TOKEN'], enableFlag: 'SUDO_WHATSAPP_ENABLE',
+    // RETURNS the adapter: cli.ts keeps a reference for its high-criticality
+    // escalation send (maybeGuardedSend / whatsAppAdapter.isConnected). A
+    // migration that dropped the return would leave that path permanently
+    // null — silently, since it only fires on a high-crit alert.
+    async start(deps) {
+      const { WhatsAppAdapter } = await import('./whatsapp.js');
+      const allowedJids = (process.env['WHATSAPP_ALLOWED_JIDS'] ?? '')
+        .split(',').map((v) => v.trim()).filter(Boolean);
+      const wa = new WhatsAppAdapter(undefined, allowedJids);
+      await wireAdapter('whatsapp', wa, deps);
+      deps.log.info('WhatsApp registered on gateway router (started at gateway finalize)');
+      return wa;
+    },
+  },
   {
     id: 'email', tokenEnvKeys: ['EMAIL_IMAP_USER'],
     // First channel migrated off inline construction (ADR 0010 D3 stage 2).
