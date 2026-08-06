@@ -25,6 +25,29 @@
  * per PR, each shipping green (ADR 0010, D3).
  */
 
+import type { ChannelAdapter } from './adapter.js';
+
+/** A ChannelAdapter that may also accept a hook emitter (concrete adapters do). */
+type WireableAdapter = ChannelAdapter & { setHookEmitter?(hooks: unknown): void };
+
+/**
+ * Runtime handles a channel needs to build and wire itself. These all live in
+ * cli.ts's closure today, which is exactly why adapter construction could not
+ * move out: the difficulty is threading these, not the adapters (ADR 0010 D3
+ * stage 2, see docs/D3_STAGE2_HANDOFF.md).
+ */
+export interface ChannelRuntimeDeps {
+  /** Register the adapter's outbound send path. */
+  registerOutboundAdapter: (adapter: ChannelAdapter) => void;
+  /** Hook emitter handed to the adapter (opaque here — the adapter types it). */
+  hooks: unknown;
+  /** Whether chat-based approvals are on. */
+  chatApprovals: boolean;
+  /** Approval sender registry (only used when chatApprovals). */
+  approvalManager: { registerSender(channel: string, adapter: ChannelAdapter): void } | null;
+  log: { info(msg: string): void; warn(obj: unknown, msg?: string): void };
+}
+
 /** One gateway-managed channel. */
 export interface ChannelDeclaration {
   id: string;
@@ -39,6 +62,37 @@ export interface ChannelDeclaration {
   enableFlag?: string;
   /** Human note for the doctor output. */
   note?: string;
+  /**
+   * Build + wire the adapter. Absent means this channel is still constructed
+   * inline in cli.ts — migrated and inline channels coexist so stage 2 can move
+   * one channel per PR. Must not throw: a channel failing to start is
+   * non-fatal, exactly as the inline blocks treated it.
+   */
+  start?(deps: ChannelRuntimeDeps, tokenEnvKey: string | null): Promise<void>;
+}
+
+/**
+ * Register an adapter on the shared gateway router, creating it if this is the
+ * first channel to need it. Started later by the gateway-finalize step.
+ */
+async function registerOnGatewayRouter(adapter: WireableAdapter): Promise<void> {
+  const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } =
+    await import('./router.js');
+  const gw = getGlobalMessageRouter() ?? new MessageRouter();
+  setGlobalMessageRouter(gw);
+  gw.registerAdapter(adapter);
+}
+
+/** Shared wiring every channel does identically once its adapter exists. */
+async function wireAdapter(
+  id: string,
+  adapter: WireableAdapter,
+  deps: ChannelRuntimeDeps,
+): Promise<void> {
+  deps.registerOutboundAdapter(adapter);
+  adapter.setHookEmitter?.(deps.hooks);
+  if (deps.chatApprovals) deps.approvalManager?.registerSender(id, adapter);
+  await registerOnGatewayRouter(adapter);
 }
 
 /**
@@ -51,7 +105,17 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
   { id: 'discord', tokenEnvKeys: ['DISCORD_TOKEN', 'DISCORD_BOT_TOKEN'] },
   { id: 'slack', tokenEnvKeys: ['SLACK_BOT_TOKEN'] },
   { id: 'whatsapp', tokenEnvKeys: ['WHATSAPP_TOKEN'], enableFlag: 'SUDO_WHATSAPP_ENABLE' },
-  { id: 'email', tokenEnvKeys: ['EMAIL_IMAP_USER'] },
+  {
+    id: 'email', tokenEnvKeys: ['EMAIL_IMAP_USER'],
+    // First channel migrated off inline construction (ADR 0010 D3 stage 2).
+    // Chosen first because it is the only channel enabled on the prod box, so a
+    // regression shows up immediately in the boot log instead of hiding.
+    async start(deps) {
+      const { EmailAdapter } = await import('./email.js');
+      await wireAdapter('email', new EmailAdapter(), deps);
+      deps.log.info('Email registered on gateway router (started at gateway finalize)');
+    },
+  },
   { id: 'sms', tokenEnvKeys: ['TWILIO_ACCOUNT_SID'] },
   { id: 'irc', tokenEnvKeys: ['IRC_SERVER'], requiresAllOf: ['IRC_SERVER', 'IRC_NICK'] },
   { id: 'matrix', tokenEnvKeys: ['MATRIX_HOMESERVER'], requiresAllOf: ['MATRIX_HOMESERVER', 'MATRIX_ACCESS_TOKEN'] },
