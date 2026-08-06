@@ -26,6 +26,13 @@ import { join } from 'node:path';
 const PRICE_ROW = /['"][\w.-]+\/[\w.:-]+['"]\s*:\s*\{[^}]*(?:inUsdPerM|inputPerM|outUsdPerM|outputPerM)/;
 
 /**
+ * A `'provider/model': { context_window… }` LIMIT row. Same drift risk as
+ * price: a model missing from the limits table silently gets the 128K default,
+ * so a 1M-context model is compacted at 128K and a long generation truncated.
+ */
+const LIMIT_ROW = /['"][\w.-]+\/[\w.:-]+['"]\s*:\s*\{[^}]*(?:context_window|contextWindow|max_output)/;
+
+/**
  * Files allowed to contain price rows.
  *   - model-catalog.ts is the single source (it builds rows via a helper, so it
  *     does not even match the pattern — listed for intent).
@@ -35,6 +42,16 @@ const PRICE_ROW = /['"][\w.-]+\/[\w.:-]+['"]\s*:\s*\{[^}]*(?:inUsdPerM|inputPerM
 const ALLOWED: Record<string, number> = {
   'src/llm/model-catalog.ts': Number.POSITIVE_INFINITY,
   'src/core/brain/costs.ts': 35,
+};
+
+/**
+ * Files allowed to contain LIMIT rows. Unlike PRICE_TABLE (deleted, #1086),
+ * limits.ts MODEL_LIMITS is still load-bearing — only pricing was delegated so
+ * far — so it is pinned rather than banned: new models go in the catalog.
+ */
+const ALLOWED_LIMITS: Record<string, number> = {
+  'src/llm/model-catalog.ts': Number.POSITIVE_INFINITY,
+  'src/llm/limits.ts': 26,
 };
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -47,22 +64,27 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Count price-table rows per file, relative to the repo root. */
-export function countPriceRows(root: string): Map<string, number> {
+/** Count rows matching `pattern` per file, relative to the repo root. */
+export function countRows(root: string, pattern: RegExp): Map<string, number> {
   const counts = new Map<string, number>();
   for (const file of walk(join(root, 'src'))) {
     const rel = file.slice(root.length + 1);
     let n = 0;
     for (const line of readFileSync(file, 'utf8').split('\n')) {
-      if (PRICE_ROW.test(line)) n += 1;
+      if (pattern.test(line)) n += 1;
     }
     if (n > 0) counts.set(rel, n);
   }
   return counts;
 }
 
+/** Back-compat helper: price rows only. */
+export function countPriceRows(root: string): Map<string, number> {
+  return countRows(root, PRICE_ROW);
+}
+
 describe('price-table ratchet — the catalog is the single source', () => {
-  const counts = countPriceRows(process.cwd());
+  const counts = countRows(process.cwd(), PRICE_ROW);
 
   it('no NEW file declares model prices', () => {
     const unexpected = [...counts.keys()].filter((f) => !(f in ALLOWED));
@@ -93,5 +115,36 @@ describe('price-table ratchet — the catalog is the single source', () => {
     expect(PRICE_ROW.test(`  'xai/grok-3': { inUsdPerM: 0.3, outUsdPerM: 0.5 },`)).toBe(true);
     // …and does not fire on ordinary code.
     expect(PRICE_ROW.test(`  const rate = rateFor(model);`)).toBe(false);
+  });
+});
+
+describe('limit-table ratchet — context windows have one source too', () => {
+  const counts = countRows(process.cwd(), LIMIT_ROW);
+
+  it('no NEW file declares model context limits', () => {
+    const unexpected = [...counts.keys()].filter((f) => !(f in ALLOWED_LIMITS));
+    expect(
+      unexpected,
+      `These files declare model limit rows. Add the model to ` +
+      `src/llm/model-catalog.ts instead — a model missing from a limits table ` +
+      `silently gets the 128K default, so a 1M-context model is compacted at 128K.`,
+    ).toEqual([]);
+  });
+
+  it('the legacy limits table can shrink but never grow', () => {
+    for (const [file, cap] of Object.entries(ALLOWED_LIMITS)) {
+      if (!Number.isFinite(cap)) continue;
+      const actual = counts.get(file) ?? 0;
+      expect(
+        actual,
+        `${file} gained limit rows (${actual} > ${cap}). New models go in ` +
+        `model-catalog.ts; lower this cap as rows are removed.`,
+      ).toBeLessThanOrEqual(cap);
+    }
+  });
+
+  it('the limit detector actually catches a planted row', () => {
+    expect(LIMIT_ROW.test(`  'anthropic/claude-opus-5': { context_window: 1_000_000, max_output: 128_000 },`)).toBe(true);
+    expect(LIMIT_ROW.test(`  const { context_window } = limitsFor(model);`)).toBe(false);
   });
 });
