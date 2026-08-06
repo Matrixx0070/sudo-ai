@@ -125,6 +125,35 @@ Do **not** treat that as settled: it is not proven that WAL removes the observed
 contention, only that the named DBs lack the setting that would prevent it. Step
 0 must measure before anything is deleted.
 
+### The premise checks out — and the problem is bigger than the TUI
+
+Measured against the live daemon (pid from `pm2 pid sudo-ai-v5`, via
+`/proc/<pid>/fd`): all three DBs the comment names **are** held open. The
+comment is accurate.
+
+But the same measurement shows **54 open `.db` descriptors for only 20 distinct
+files** — the daemon opens the same databases repeatedly, with no shared
+connection ownership:
+
+```
+12x mind.db   9x audit.db   5x consciousness.db   3x trust.db   3x gateway.db
+```
+
+SQLite locks are **per connection, not per process**. In rollback-journal
+(`delete`) mode a write takes an EXCLUSIVE lock, so **`trust.db` — 3 connections,
+`delete` mode — lets the daemon contend with itself, today, with no TUI
+involved.**
+
+This strengthens step 0 rather than changing it: the WAL + `busy_timeout` fix is
+worth doing on its own merits for intra-process contention in production,
+independent of whether the TUI ever shares `data/`.
+
+It also surfaces the next layer down, out of scope here: **the state layer has no
+connection ownership model.** 12 connections to `mind.db` from one process is
+not a tuning problem, it is a missing abstraction — and it is the reason
+"isolate by pointing at a different directory" became the tool of choice for
+every caller with a locking complaint.
+
 ## Alternatives
 
 **A. Do nothing.** Production is currently correct. Rejected: correctness rests
