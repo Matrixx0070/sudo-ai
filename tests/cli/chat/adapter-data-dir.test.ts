@@ -49,6 +49,29 @@ describe('TUI adapter pre-captures the owner DATA_DIR', () => {
     expect(captured).toBe(`${process.cwd()}/data`);
   }, 180_000);
 
+  it('the runtime guard THROWS if identity ever equals the private state dir', () => {
+    // Simulate the failure: force paths.ts to capture the TUI's own state dir,
+    // so identity === state. _bootstrap() must refuse rather than quietly read
+    // credentials from a stale private copy.
+    const tuiDir = `${process.env['HOME'] ?? '/root'}/.sudo-ai/tui-data`;
+    const script = `
+      process.env['DATA_DIR'] = ${JSON.stringify('PLACEHOLDER')};
+      (async () => {
+        const { TuiAgentAdapter } = await import('${process.cwd()}/src/cli/commands/chat/agent-loop-adapter.js');
+        try {
+          const it = new TuiAgentAdapter().stream({ sessionId: 'guard', message: 'x', signal: new AbortController().signal });
+          await it.next();
+          process.stdout.write('NO_THROW');
+        } catch (e) { process.stdout.write('THREW:' + String(e.message).slice(0, 90)); }
+      })();
+    `.replace('PLACEHOLDER', tuiDir);
+    const out = execFileSync('npx', ['tsx', '-e', script], {
+      cwd: process.cwd(), encoding: 'utf8', timeout: 180_000,
+    });
+    expect(out).toContain('THREW:');
+    expect(out).toContain('identity root was not captured');
+  }, 240_000);
+
   it('the protocol discriminates — a module that does NOT load paths.js lets the sentinel win', () => {
     // dispatcher.js is a pure in-process event bus with no paths.js dependency.
     const captured = capturedDataDirAfterImporting(

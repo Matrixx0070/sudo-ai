@@ -30,7 +30,8 @@ import fs from 'node:fs';
 // — where a stale copy silently served turns from an 18-day-expired token.
 // This used to work only because App.tsx imports provider.js (which reaches
 // paths.js) first; that guarantee hung on one value import and is not a
-// contract anyone could see. Pinned by tests/cli/chat/adapter-data-dir.test.ts.
+// contract anyone could see. Pinned by tests/cli/chat/adapter-data-dir.test.ts,
+// and enforced at runtime by the invariant check in _bootstrap().
 import { DATA_DIR as OWNER_DATA_DIR } from '../../../core/shared/paths.js';
 import type { ProviderChunk } from './provider.js';
 import { dispatcher } from './dispatcher.js';
@@ -89,9 +90,20 @@ export class TuiAgentAdapter {
 
     // Set DATA_DIR before constructing AgentLoop so all sub-modules that read it
     // (AuditTrail, VetoOverrideStore, TrustTierTracker, etc.) use the TUI-private path.
-    // Read OWNER_DATA_DIR before the override so the import above cannot be
-    // erased as unused — the capture it forces is the whole point.
-    process.stderr.write(`[tui-bootstrap] state=${tuiDataDir} identity=${OWNER_DATA_DIR}\n`);
+    // Enforce the split rather than assume it. This both keeps the paths.js
+    // import load-bearing (it cannot be elided as unused) and converts the
+    // failure mode from silent to loud: if identity ever resolved to the
+    // private state dir, credentials would come from a stale copy and the agent
+    // would quietly answer on the wrong lane instead of erroring.
+    if (!OWNER_DATA_DIR || path.resolve(OWNER_DATA_DIR) === path.resolve(tuiDataDir)) {
+      throw new Error(
+        `TUI bootstrap: identity root was not captured before state isolation ` +
+        `(identity=${OWNER_DATA_DIR}, state=${tuiDataDir}). Credentials resolve ` +
+        `through paths.ts DATA_DIR, which caches at first import — something now ` +
+        `loads paths.ts after this module sets DATA_DIR. See ` +
+        `tests/cli/chat/adapter-data-dir.test.ts.`,
+      );
+    }
     process.env['DATA_DIR'] = tuiDataDir;
 
     // --- Config ---
