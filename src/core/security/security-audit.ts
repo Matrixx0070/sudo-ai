@@ -20,7 +20,7 @@ import {
   untrustedInboundActive,
   type LintDeps,
 } from '../config/flag-lint.js';
-import { identityPath } from '../shared/paths.js';
+import { credentialPath } from '../shared/paths.js';
 
 export type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 
@@ -136,8 +136,8 @@ const CRED_ENV_WITH_REF = [
  * behaviour-identical wherever the identity root is the default <root>/data.
  */
 export const SENSITIVE_FILES = [
-  identityPath('xai-oauth.json'),
-  identityPath('oauth-creds.json'),
+  credentialPath('xai-oauth.json'),
+  credentialPath('oauth-creds.json'),
   'data/gateway.db',
   '.env',
 ] as const;

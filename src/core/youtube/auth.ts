@@ -33,7 +33,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createLogger } from '../shared/logger.js';
-import { identityPath } from '../shared/paths.js';
+import { credentialPath } from '../shared/paths.js';
 
 const log = createLogger('youtube:auth');
 
@@ -45,7 +45,7 @@ const EXPIRY_SKEW_MS = 60_000;
 // ADR 0011: the OAuth cache is principal identity, so it resolves through the
 // identity root instead of a cwd-relative 'data/...' literal that ignored
 // DATA_DIR entirely (and so read prod credentials under staging).
-const DEFAULT_TOKEN_FILE = identityPath('youtube-oauth.json');
+const DEFAULT_TOKEN_FILE = credentialPath('youtube-oauth.json');
 
 /** Shape persisted to YOUTUBE_TOKEN_FILE. Never contains the client secret. */
 export interface YouTubeTokenCache {

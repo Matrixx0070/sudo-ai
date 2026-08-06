@@ -275,7 +275,7 @@ If WAL is ever applied opportunistically, apply it to `trust.db` **and
 1. **Delete the TUI's `DATA_DIR` override** (`agent-loop-adapter.ts:82`) — it
    buys ~0.16 s/day and costs correctness. Verify the TUI still runs cleanly
    against a shared `data/`; the numbers above say it will.
-2. Keep `identityPath()` **only** for the two callers whose isolation is
+2. Keep `credentialPath()` **only** for the two callers whose isolation is
    genuine — the eval sandbox (child process) and tenancy (different principal).
    Steps 2-3 shrink accordingly; the TUI and bench need nothing.
 3. WAL: opportunistic, unprioritised.
@@ -316,12 +316,35 @@ Introduce an explicit **identity root**, distinct from the state root.
 /** Instance state — dbs, journals, caches. Isolate freely. */
 export const DATA_DIR: string        // unchanged
 
-/** Principal identity — OAuth tokens, device identity, signing keys. */
-export const IDENTITY_DIR: string =
-  process.env['SUDO_IDENTITY_DIR'] ?? DATA_DIR
+/** Principal credentials — OAuth tokens, web-seat sessions, device identity, keys. */
+export const CREDENTIAL_DIR: string =
+  process.env['SUDO_CREDENTIAL_DIR'] ?? DATA_DIR
 
-export function identityPath(...segments: string[]): string
+export function credentialPath(...segments: string[]): string
 ```
+
+**Naming — why `SUDO_CREDENTIAL_DIR` and not `SUDO_IDENTITY_DIR`.** The obvious
+name is already taken by an unrelated subsystem: `agent/alignment-seed.ts:92`
+`resolveIdentityDir()` reads `SUDO_IDENTITY_DIR` as the directory holding the
+operator identity-ANCHOR DOCUMENTS (`core-identity.md`, `values.json`,
+`hard-prohibitions.yaml`; default `<root>/config`, shipped since F108). It was
+already in `flag-manifest.json` under that meaning, which is why a manifest
+regeneration did not flag the clash. Reusing it makes one subsystem silently
+reconfigure the other, in **both** directions — measured on the first cut of
+this change, three fresh processes:
+
+| `SUDO_IDENTITY_DIR` | alignment anchor dir | anchor present | credential root |
+|---|---|---|---|
+| unset | `<root>/config` | (n/a here) | `<root>/data` |
+| `/tmp/pc-config` (its **own** meaning) | `/tmp/pc-config` | **true** | **`/tmp/pc-config`** ← every OAuth store moves → "no usable token" |
+| `<root>/data` (the pin this ADR **prescribes**) | **`<root>/data`** | **false** | `<root>/data` ← anchor lost → `DEGRADED_SEED` ≈0.51, below the 0.6 min-align gate → governance gates fail closed |
+
+That is exactly the class of bug this ADR exists to remove, so the credential
+root is named `SUDO_CREDENTIAL_DIR` / `CREDENTIAL_DIR` / `credentialPath()`.
+`SUDO_IDENTITY_DIR` keeps its original alignment-anchor meaning, untouched.
+Both directions are pinned by `tests/core/shared/credential-root.test.ts`, each
+with its own discriminator (the knob is shown to move its *own* subsystem in the
+same run, so "the other did not move" cannot pass vacuously).
 
 Note the default is `DATA_DIR`, **not** `PROJECT_ROOT/data`. Defaulting to the
 project root would silently repoint staging (`ecosystem.config.cjs:846` sets
@@ -335,21 +358,21 @@ Rules:
 - **An in-process caller that isolates state must pin identity first:**
 
   ```ts
-  process.env['SUDO_IDENTITY_DIR'] ??= DATA_DIR;   // pin the real root
+  process.env['SUDO_CREDENTIAL_DIR'] ??= DATA_DIR; // pin the real root
   process.env['DATA_DIR'] = myPrivateStateDir;     // then isolate state
   ```
 
   This is correct under either import order, which is what makes it a design
   rather than another accident:
-  - `paths.ts` already loaded → `IDENTITY_DIR` captured the real root. ✅
+  - `paths.ts` already loaded → `CREDENTIAL_DIR` captured the real root. ✅
   - `paths.ts` not yet loaded → the explicit pin is read when it loads. ✅
 
-- Isolating **identity** is a separate deliberate act: set `SUDO_IDENTITY_DIR`
+- Isolating **credentials** is a separate deliberate act: set `SUDO_CREDENTIAL_DIR`
   to something else. Only multi-principal callers (tenancy) do this.
 
 The two-line pin replaces "you must have imported an unrelated module first"
 with a local, greppable, testable statement of intent at the isolation site.
-- All 11 identity sites resolve through `identityPath()`. The hardcoded
+- All identity sites resolve through `credentialPath()`. The hardcoded
   `'data/…'` literals are folded in, fixing them for staging/tenant as a
   side effect.
 
@@ -358,7 +381,7 @@ with a local, greppable, testable statement of intent at the isolation site.
 - **Two roots instead of one** — more surface. Justified because the two have
   different lifetimes, different isolation policies, and different blast radii;
   they were already separate in practice, just unnamed and enforced by accident.
-- **`SUDO_IDENTITY_DIR` is a new env var.** Mitigated by being the *only* new
+- **`SUDO_CREDENTIAL_DIR` is a new env var.** Mitigated by being the *only* new
   knob, and by absorbing the existing ad-hoc `SUDO_SIGNER_KEY_DIR`.
 - **Migration touches 11 files.** All mechanical, each independently verifiable.
 
@@ -371,7 +394,7 @@ Removes, rather than adds:
   SCAFFOLD; this deletes the reason for it.
 - **`eval-runner.ts:231-236` credential seeding is deleted**, along with its
   documented accepted risk of racing the host token store. The child sets
-  `DATA_DIR` and inherits `SUDO_IDENTITY_DIR`.
+  `DATA_DIR` and inherits `SUDO_CREDENTIAL_DIR`.
 - The `SUDO_EVAL_SEED_CREDS` flag is deleted with it.
 - Four hardcoded `'data/…'` credential literals stop being wrong under staging.
 
@@ -392,15 +415,15 @@ a probe entry point).
    Converting a live DB the daemon holds open needs a maintenance window —
    treat as an operational change, not a code-only one.
 
-1. Add `IDENTITY_DIR` + `identityPath()`, defaulting to today's value. **Zero**
+1. Add `CREDENTIAL_DIR` + `credentialPath()`, defaulting to today's value. **Zero**
    behaviour change. Add the sentinel test: identity does NOT follow a late
    `DATA_DIR` override.
 2. Move the 7 `DATA_DIR`-based identity sites to `identityPath()`. Behaviour
    identical; intent now explicit.
 3. Fold in the 4 hardcoded `'data/…'` literals. Fixes staging/tenant reads.
-4. `eval-runner`: pass `SUDO_IDENTITY_DIR` to the child; **delete** the seeding
+4. `eval-runner`: pass `SUDO_CREDENTIAL_DIR` to the child; **delete** the seeding
    block and `SUDO_EVAL_SEED_CREDS`.
-5. `tenant-manager`: set `SUDO_IDENTITY_DIR` explicitly alongside `DATA_DIR`,
+5. `tenant-manager`: set `SUDO_CREDENTIAL_DIR` explicitly alongside `DATA_DIR`,
    making tenant identity isolation intentional rather than incidental.
 6. Interim guard (may land first, independently): static `paths.ts` import in
    `agent-loop-adapter.ts` so the TUI is safe before step 2 lands.
@@ -417,23 +440,67 @@ explicit. Confirm that a tenant must **never** inherit the owner's OAuth tokens
 behaviour (or need a maintenance window) and belong in separately reviewed
 changes.
 
-- Step 1 — `IDENTITY_DIR` + `identityPath()` added to `core/shared/paths.ts`,
-  defaulting to `DATA_DIR`. Pinned by `tests/core/shared/identity-root.test.ts`
-  (fresh-process sentinel protocol, with a discriminator case so a pass cannot
-  be vacuous).
-- Steps 2–3 — 12 identity sites migrated. Resolved paths verified unchanged
-  under the default root; the four ex-hardcoded `data/…` literals now follow
-  `DATA_DIR` under staging, which was the point.
-- `xai-*` token stores reach `identityPath` through `llm/grok-runtime.ts`, the
-  extraction seam, per the rule in that file.
+- Step 1 — `CREDENTIAL_DIR` + `credentialPath()` added to `core/shared/paths.ts`,
+  defaulting to `DATA_DIR`. Pinned by `tests/core/shared/credential-root.test.ts`
+  (fresh-process sentinel protocol; every case carries a discriminator so a pass
+  cannot be vacuous).
+- Steps 2–3 — **15 sites** migrated (see the reconciliation below). Resolved
+  paths verified unchanged under the default root and under a pre-start
+  `DATA_DIR=data-staging`; the ex-hardcoded `data/…` literals now follow the
+  root, which was the point.
+- `xai-*` and `grok-*` stores reach `credentialPath` through
+  `llm/grok-runtime.ts`, the extraction seam, per the rule in that file.
+
+### Re-derived site list — the first pass under-counted
+
+The list at the top of this ADR came from one grep and named 11 sites. Deriving
+it a second, independent way — the eval sandbox's own credential seeds
+(`eval-runner.ts:231`), what `security-audit.ts` guards, a `find` over
+`data/*.json` + `data/keys/` filtered on mode `0600`, and an enumeration of
+**every** `path.join(DATA_DIR, …)` / `dataPath(…)` in `src/` — found **three
+more credential sites that the first migration missed**:
+
+| missed site | store | evidence it is a credential |
+|---|---|---|
+| `llm/gemini-web-session-manager.ts:59` | `gemini-web-session.json` | captured Google account cookies (`__Secure-1PSID`) — on disk, 0600 |
+| `llm/grok-web-session-manager.ts:37` | `grok-web-session.json` | grok.com cookie + statsigId — on disk, 0600 |
+| `llm/grok-voice-session.ts:29` | *same* `grok-web-session.json` | a **second, independent** literal for the same store |
+
+They were missed because the first derivation pattern-matched on `oauth` /
+`token` / `key` names; a *web-seat session* is a credential that carries neither
+word. Both stores exist in the live `data/` at 0600 and both would have been
+stranded by any state isolation — precisely the failure this ADR is about.
+
+Full reconciliation (15 sites, 12 distinct stores):
+
+| store | site(s) | status |
+|---|---|---|
+| `claude-oauth.json` | `llm/claude-oauth-manager.ts`, `cli/commands/doctor.ts` | migrated (first pass) |
+| `xai-oauth.json` | `llm/xai-oauth-manager.ts`, `security-audit.ts` | migrated (first pass) |
+| `xai-apikey.json` | `llm/xai-apikey-manager.ts` | migrated (first pass) |
+| `gemini-gpsoauth-seed.json` | `llm/gemini-gpsoauth-reauth.ts` | migrated (first pass) |
+| `keys/` | `security/artifact-signer.ts`, `security/signer.ts` | migrated (first pass; absorbs `SUDO_SIGNER_KEY_DIR`) |
+| `device-identity.json` | `core/fleet/device-identity.ts`, `cli.ts` | migrated (first pass) |
+| `youtube-oauth.json` | `core/youtube/auth.ts` | migrated (first pass; was hardcoded) |
+| `oauth-creds.json` | `security/security-audit.ts` | migrated (first pass; was hardcoded) |
+| `xai-oauth.json`, `oauth.json` (reset targets) | `core/onboard/onboard.ts` | migrated (first pass; kept RELATIVE, see below) |
+| **`gemini-web-session.json`** | `llm/gemini-web-session-manager.ts` | **migrated in this revision** |
+| **`grok-web-session.json`** | `llm/grok-web-session-manager.ts`, `llm/grok-voice-session.ts` | **migrated in this revision** |
+
+Behaviour-neutrality was re-verified for all 15 after the additions: under an
+unset `DATA_DIR` and under a pre-start `DATA_DIR=<root>/data-staging`, every
+resolved path is byte-identical to the expression it replaced (the two
+ex-hardcoded literals diverge under staging — that is the intended fix). With
+`SUDO_CREDENTIAL_DIR=<root>/data` + `DATA_DIR=/tmp/private-state`, state moves
+and all twelve stores stay put.
 
 **Deviation from step 3 — `onboard.ts` reset targets stay RELATIVE.** The ADR
 listed `onboard.ts:191` alongside the other hardcoded literals, but its contract
 differs: every reset target is passed through `assertNotFrozen()` (which matches
 PROTECTED_PATHS on relative POSIX paths) and then `path.join(deps.rootDir, rel)`.
-An absolute `identityPath()` would defeat both — silently bypassing the
-frozen-path guard on a destructive path. The targets now track the identity root
-*relatively*; if the identity root is outside the project root, no safe relative
+An absolute `credentialPath()` would defeat both — silently bypassing the
+frozen-path guard on a destructive path. The targets now track the credential
+root *relatively*; if it is outside the project root, no safe relative
 expression exists, so the credential targets are omitted and reset deletes
 nothing rather than deleting the wrong file.
 
@@ -441,11 +508,11 @@ nothing rather than deleting the wrong file.
 read `process.env['DATA_DIR'] ?? '/tmp'`, so with `DATA_DIR` unset the device
 keypair landed in world-writable `/tmp`. That leak is real:
 `/tmp/device-identity.json` exists, dated 2026-06-14. It now resolves to
-`IDENTITY_DIR`. Behaviour is identical wherever `DATA_DIR` is set — prod and
+`CREDENTIAL_DIR`. Behaviour is identical wherever `DATA_DIR` is set — prod and
 staging both set it in `ecosystem.config.cjs`.
 
-**Identity-adjacent sites deliberately NOT migrated** (surfaced by re-deriving
-the list; each needs its own decision, none is a `DATA_DIR`-vs-identity bug):
+**Credential-adjacent sites deliberately NOT migrated** (surfaced by re-deriving
+the list; each needs its own decision, none is a `DATA_DIR`-vs-credential bug):
 
 | site | why not |
 |---|---|
@@ -455,3 +522,11 @@ the list; each needs its own decision, none is a `DATA_DIR`-vs-identity bug):
 | `brain/claude-token-manager.ts:18` `/root/.claude/.credentials.json` | external CLI's store, outside any sudo-ai root |
 | `security/vault-credentials.ts:33` `workspace/vault` | already has its own `SUDO_CRED_VAULT_DIR` override |
 | `gdrive/changes.ts:22` `changes-token.json` | a sync cursor, not a credential |
+| `gdrive/auth.ts` `oauthTokenFile` | already has its own `GDRIVE_OAUTH_TOKEN_FILE` override; no `DATA_DIR` default |
+| `core/channels/whatsapp.ts:53` `data/whatsapp-auth` | a **config-declared** path (`channels.json5` `sessionPath`), not a `paths.ts` resolution — moving it is a config migration |
+| `scripts/prod-oauth-step.ts:16` `dataPath('claude-oauth.json')` | a manual operator script, run with default env; left as state-rooted deliberately so it can never write into an isolated credential root by surprise |
+
+**Unrelated fragility noticed, not fixed here:** `alignment-seed.ts:92` reads
+its var with `??`, so `SUDO_IDENTITY_DIR=''` resolves the anchor dir to `''`
+rather than the default. It fails safe (no anchor → `DEGRADED_SEED`) and is
+outside this change's scope.

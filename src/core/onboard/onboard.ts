@@ -24,7 +24,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { isFrozenGuidancePath } from '../workspace/guidance-registry.js';
 import { SEED_SPECS, type SeedSpec } from './seeds.js';
-import { IDENTITY_DIR, PROJECT_ROOT } from '../shared/paths.js';
+import { CREDENTIAL_DIR, PROJECT_ROOT } from '../shared/paths.js';
 import {
   writeFileAudited,
   removeFileAudited,
@@ -204,7 +204,7 @@ export function scanMachine(deps: OnboardDeps): ScanReport {
  * visible, and it is fail-safe: nothing is deleted.
  */
 function credentialResetTargets(): string[] {
-  const rel = path.relative(PROJECT_ROOT, IDENTITY_DIR);
+  const rel = path.relative(PROJECT_ROOT, CREDENTIAL_DIR);
   if (rel.startsWith('..') || path.isAbsolute(rel)) return [];
   const dir = rel === '' ? '.' : rel;
   return [path.posix.join(...dir.split(path.sep), 'xai-oauth.json'),

@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process';
 import { createInterface, type Interface } from 'node:readline';
 import { writeFile, readFile, rm, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { DATA_DIR, PROJECT_ROOT } from './grok-runtime.js';
+import { DATA_DIR, PROJECT_ROOT, credentialPath } from './grok-runtime.js';
 import { createLogger } from './grok-runtime.js';
 import { getGrokWebSessionManager, type GrokWebSessionManager } from './grok-web-session-manager.js';
 import { isGrokWebSessionEnabled, GrokWebDisabledError } from './grok-web-media.js';
@@ -26,7 +26,9 @@ import { isGrokWebSessionEnabled, GrokWebDisabledError } from './grok-web-media.
 const log = createLogger('llm:grok-voice-session');
 
 const SCRIPT_PATH = path.join(PROJECT_ROOT, 'scripts', 'grok-web', 'grok_livekit_session.py');
-const SESSION_PATH = path.join(DATA_DIR, 'grok-web-session.json');
+// Same store grok-web-session-manager owns: a credential, so it follows the
+// credential root. WORK_DIR below is scratch state and stays on DATA_DIR.
+const SESSION_PATH = credentialPath('grok-web-session.json');
 const PYTHON_BIN = process.env['SUDO_GROK_WEB_PYTHON'] ?? 'python3';
 const WORK_DIR = path.join(DATA_DIR, 'grok-realtime-voice');
 

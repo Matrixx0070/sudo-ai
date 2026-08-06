@@ -40,8 +40,8 @@ export const DATA_DIR: string = process.env['DATA_DIR']
   : path.join(PROJECT_ROOT, 'data');
 
 /**
- * `<identity root>` — the PRINCIPAL's credential root: OAuth token stores,
- * device identity, signing keys. ADR 0011.
+ * `<credential root>` — the PRINCIPAL's credential root: OAuth token stores,
+ * web-seat session stores, device identity, signing keys. ADR 0011.
  *
  * This is deliberately distinct from {@link DATA_DIR}, which is the INSTANCE's
  * state root (21 dbs, journals, caches). The two have different lifetimes and
@@ -49,30 +49,42 @@ export const DATA_DIR: string = process.env['DATA_DIR']
  *
  *   - Isolating state is routine (SQLite lock/fsync avoidance, clean bench
  *     runs). A caller that isolates state must NOT lose the principal.
- *   - Isolating identity means the agent stops being itself. Only a
+ *   - Isolating credentials means the agent stops being itself. Only a
  *     multi-principal caller (tenancy) should ever do it, and it must say so
- *     explicitly by setting `SUDO_IDENTITY_DIR`.
+ *     explicitly by setting `SUDO_CREDENTIAL_DIR`.
+ *
+ * NAMING — this is `SUDO_CREDENTIAL_DIR`, **not** `SUDO_IDENTITY_DIR`. That
+ * name was already taken, with an unrelated meaning: `agent/alignment-seed.ts`
+ * `resolveIdentityDir()` reads `SUDO_IDENTITY_DIR` as the directory holding the
+ * operator IDENTITY-ANCHOR DOCUMENTS (`core-identity.md`, `values.json`,
+ * `hard-prohibitions.yaml`; default `<root>/config`). Reusing it would make one
+ * subsystem silently reconfigure another in both directions: pinning it at the
+ * credential root drags the alignment anchor to `<root>/data`, where no anchor
+ * exists → DEGRADED_SEED (≈0.51, below the 0.6 min-align gate); pointing it at
+ * a config dir for the alignment anchor repoints every OAuth store there →
+ * "no usable token". Both were reproduced before this rename. Kept apart by
+ * `tests/core/shared/credential-root.test.ts`.
  *
  * The default is `DATA_DIR`, **not** `PROJECT_ROOT/data`. Defaulting to the
  * project root would silently repoint staging (ecosystem.config.cjs sets
  * `DATA_DIR=<root>/data-staging` before the process starts) at PRODUCTION
- * credentials. Identity therefore follows a `DATA_DIR` set BEFORE process
- * start — a deployment decision — and ignores one reassigned mid-process,
- * which is only ever a state-isolation request.
+ * credentials. The credential root therefore follows a `DATA_DIR` set BEFORE
+ * process start — a deployment decision — and ignores one reassigned
+ * mid-process, which is only ever a state-isolation request.
  *
- * An in-process caller that isolates state must pin identity first:
+ * An in-process caller that isolates state must pin credentials first:
  *
  * ```ts
- * process.env['SUDO_IDENTITY_DIR'] ??= DATA_DIR;  // pin the real root
- * process.env['DATA_DIR'] = myPrivateStateDir;    // then isolate state
+ * process.env['SUDO_CREDENTIAL_DIR'] ??= DATA_DIR;  // pin the real root
+ * process.env['DATA_DIR'] = myPrivateStateDir;      // then isolate state
  * ```
  *
  * That is correct under either import order: if `paths.ts` is already loaded,
- * `IDENTITY_DIR` captured the real root; if it is not, the explicit pin is
- * read when it loads. Pinned by `tests/core/shared/identity-root.test.ts`.
+ * `CREDENTIAL_DIR` captured the real root; if it is not, the explicit pin is
+ * read when it loads. Pinned by `tests/core/shared/credential-root.test.ts`.
  */
-export const IDENTITY_DIR: string = process.env['SUDO_IDENTITY_DIR']
-  ? path.resolve(process.env['SUDO_IDENTITY_DIR'])
+export const CREDENTIAL_DIR: string = process.env['SUDO_CREDENTIAL_DIR']
+  ? path.resolve(process.env['SUDO_CREDENTIAL_DIR'])
   : DATA_DIR;
 
 /** `<root>/workspace` — agent working area. */
@@ -163,12 +175,12 @@ export function dataPath(...segments: string[]): string {
 }
 
 /**
- * Join one or more segments onto the IDENTITY root ({@link IDENTITY_DIR}).
+ * Join one or more segments onto the CREDENTIAL root ({@link CREDENTIAL_DIR}).
  *
- * Use for anything that identifies the PRINCIPAL — OAuth token stores, device
- * identity, signing keys. Never for instance state; use {@link dataPath} for
- * that. ADR 0011.
+ * Use for anything that authenticates the PRINCIPAL — OAuth token stores,
+ * web-seat session stores, device identity, signing keys. Never for instance
+ * state; use {@link dataPath} for that. ADR 0011.
  */
-export function identityPath(...segments: string[]): string {
-  return path.join(IDENTITY_DIR, ...segments);
+export function credentialPath(...segments: string[]): string {
+  return path.join(CREDENTIAL_DIR, ...segments);
 }

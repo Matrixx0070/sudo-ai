@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { genId, contentHash } from '../shared/utils.js';
-import { identityPath } from '../shared/paths.js';
+import { credentialPath } from '../shared/paths.js';
 
 const log = createLogger('security:artifact-signer');
 
@@ -55,7 +55,7 @@ export interface SignerConfig {
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_KEY_DIR = identityPath('keys');
+const DEFAULT_KEY_DIR = credentialPath('keys');
 const SECRET_FILENAME = 'artifact-secret';
 const HMAC_ALGORITHM = 'sha256';
 const HASH_ALGORITHM = 'sha256';

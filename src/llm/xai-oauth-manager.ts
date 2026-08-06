@@ -49,7 +49,7 @@ import {
   writeSync,
 } from 'node:fs';
 import path from 'node:path';
-import { identityPath } from './grok-runtime.js';
+import { credentialPath } from './grok-runtime.js';
 import { writeFileAtomic } from './grok-runtime.js';
 import { createLogger } from './grok-runtime.js';
 import type { XaiModelEntry } from './xai-models.js';
@@ -66,7 +66,7 @@ const CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
 const SCOPE = 'openid profile email offline_access grok-cli:access api:access';
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 
-const DEFAULT_STORE_PATH = identityPath('xai-oauth.json');
+const DEFAULT_STORE_PATH = credentialPath('xai-oauth.json');
 
 /**
  * Refresh when within this many seconds of expiry. See file header: deliberate

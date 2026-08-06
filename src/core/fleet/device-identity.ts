@@ -34,7 +34,7 @@ import {
 } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { IDENTITY_DIR } from '../shared/paths.js';
+import { CREDENTIAL_DIR } from '../shared/paths.js';
 
 /** On-disk shape of `device-identity.json`. */
 export interface PersistedDeviceIdentity {
@@ -69,7 +69,7 @@ export interface DeviceIdentity {
  * principal, so it must not follow a state-isolation override. Callers may
  * still pass an explicit directory (tests, tooling).
  */
-export function defaultIdentityPath(dataDir: string = IDENTITY_DIR): string {
+export function defaultIdentityPath(dataDir: string = CREDENTIAL_DIR): string {
   return path.join(dataDir, 'device-identity.json');
 }
 

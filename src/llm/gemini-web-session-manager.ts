@@ -2,7 +2,7 @@
  * @file gemini-web-session-manager.ts
  * @description File-backed session holder for the gemini.google.com WEB seat, so the
  * lane runs headless (no browser) after a one-time cookie capture. Mirrors
- * `grok-web-session-manager.ts`: DATA_DIR persistence, 0600 atomic writes, secrets
+ * `grok-web-session-manager.ts`: credential-root persistence, 0600 atomic writes, secrets
  * never logged (lengths/booleans only), needs-relogin discipline.
  *
  * The credential is a captured set of Google account cookies. Health model:
@@ -18,7 +18,7 @@
 
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from '../core/shared/paths.js';
+import { credentialPath } from '../core/shared/paths.js';
 import { writeFileAtomic } from '../core/shared/atomic-write.js';
 import { createLogger } from '../core/shared/logger.js';
 import {
@@ -56,7 +56,9 @@ import {
 
 const log = createLogger('llm:gemini-web-session');
 
-const DEFAULT_STORE_PATH = path.join(DATA_DIR, 'gemini-web-session.json');
+// Captured Google account cookies = the PRINCIPAL's credential, so this store
+// follows the credential root, not the instance state root (ADR 0011).
+const DEFAULT_STORE_PATH = credentialPath('gemini-web-session.json');
 const DEFAULT_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 /** Re-scrape the SNlM0e token at most this often (ms); it is cheap but not free. */
@@ -116,7 +118,7 @@ export function parse1PSIDTS(setCookies: string[]): string | null {
 /** Reply from a headless generate call. */
 export interface GeminiWebReply extends GeminiCandidate {}
 
-/** File-backed manager over <DATA_DIR>/gemini-web-session.json. */
+/** File-backed manager over <CREDENTIAL_DIR>/gemini-web-session.json. */
 export class GeminiWebSessionManager {
   private readonly storePath: string;
   private readonly fetchImpl: SessionFetch;
@@ -558,7 +560,7 @@ export class GeminiWebSessionManager {
 }
 
 let singleton: GeminiWebSessionManager | null = null;
-/** Process-wide manager over <DATA_DIR>/gemini-web-session.json, created lazily. */
+/** Process-wide manager over <CREDENTIAL_DIR>/gemini-web-session.json, created lazily. */
 export function getGeminiWebSessionManager(): GeminiWebSessionManager {
   if (!singleton) {
     singleton = new GeminiWebSessionManager();

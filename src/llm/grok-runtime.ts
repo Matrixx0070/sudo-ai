@@ -26,9 +26,9 @@ export { createLogger } from '../core/shared/logger.js';
 export { writeFileAtomic } from '../core/shared/atomic-write.js';
 export { DATA_DIR, PROJECT_ROOT } from '../core/shared/paths.js';
 /**
- * Identity (credential) root — distinct from DATA_DIR, the instance state root
- * (ADR 0011). Seat token stores resolve through this so isolating state never
- * moves the principal's credentials. In the extracted package this becomes the
- * `storeDir` constructor option.
+ * Credential root — distinct from DATA_DIR, the instance state root (ADR 0011).
+ * Seat token AND web-session stores resolve through this, so isolating state
+ * never moves the principal's credentials. In the extracted package this
+ * becomes the `storeDir` constructor option.
  */
-export { identityPath } from '../core/shared/paths.js';
+export { credentialPath } from '../core/shared/paths.js';
