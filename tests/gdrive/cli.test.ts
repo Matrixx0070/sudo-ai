@@ -1,4 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
+
+// ESM hoists imports above top-level statements, so DATA_DIR must be pinned in
+// vi.hoisted (which runs first) or paths.ts captures the REAL one. Without
+// this, knew-at read the live local chronicle alongside the mocked client —
+// "known paths: 6 / chronicle delta: 31 ops" instead of the fixture's 2.
+// Green on CI's empty checkout, red on any machine with real Drive state.
+vi.hoisted(() => {
+  process.env['DATA_DIR'] = `/tmp/gdrive-cli-isolated-${process.pid}`;
+});
 import { randomBytes } from 'node:crypto';
 import { runGdriveCli, type GdriveCliDeps } from '../../src/core/gdrive/cli.js';
 import { buildManifest, type BrainManifest, type ManifestEntry } from '../../src/core/gdrive/manifest.js';

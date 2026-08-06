@@ -13,8 +13,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// ESM hoists every `import` ABOVE top-level statements, so assigning DATA_DIR
+// here ran AFTER paths.ts had already captured the real one — the sensors then
+// found the live data/gateway.db and reported available, failing the
+// "fail open" assertions on any machine with real data (green on CI only).
+// vi.hoisted runs before the imports, which is the whole point of it.
+vi.hoisted(() => {
+  // Needs no real directory: the assertion is that NO gateway.db is found.
+  process.env['DATA_DIR'] = `/tmp/cw6-no-gateway-db-${process.pid}`;
+});
 const dataDir = mkdtempSync(join(tmpdir(), 'cw6-data-'));
-process.env['DATA_DIR'] = dataDir; // no gateway.db here -> sensors fail open
 
 // Mock the homeostat SENSORS (not the module logic) so checks get fixtures.
 vi.mock('../../src/core/health/homeostat.js', async (importOriginal) => {
