@@ -8,7 +8,7 @@
  *   3. Budget gate (daily LLM spend >= cap → abort)
  *   4. Mistake auto-block gate
  *   5. Git branch gate (must be on 'self-build')
- *   6. Dirty-tree cleanup
+ *   6. Dirty-tree gate (tree not clean → skip the tick, destroy nothing)
  *   7. Agent turn (LLM produces edits)
  *   8. Post-agent gates (tsc, vitest, protected-path diff)
  *   9. Commit + journal update
@@ -268,16 +268,33 @@ function sanitizeSummary(s: string): string {
 }
 
 /**
- * Revert agent changes: reset tracked files and clean untracked files from
- * protected directories only (MEDIUM-3). Does NOT `git clean .` to avoid
- * destroying Frank's WIP outside protected paths.
+ * Restore the working tree to HEAD after a rejected agent turn.
+ *
+ * SAFETY INVARIANT: Gate 8 asserts `git status --porcelain` is EMPTY immediately
+ * before the agent turn and skips the tick otherwise (it no longer "cleans" a
+ * dirty tree). So every difference from HEAD at this point was produced by the
+ * agent, and a blanket restore destroys nothing but the agent's own work.
+ * Without that invariant this function is a working-tree wipe — do not weaken
+ * Gate 8 without rewriting this.
+ *
+ * Three steps, because the agent can dirty the tree three ways:
+ *   - staged changes (the pre-commit path runs `git add -A`) -> unstage
+ *   - tracked modifications/deletions                        -> checkout
+ *   - untracked files it created (new tests, scratch files)  -> clean
+ * The clean is deliberately unscoped: leaving agent-created files anywhere in
+ * the tree would make Gate 8 skip every subsequent tick, wedging self-build
+ * permanently after the first failing tick. `-fd` without `-x` never touches
+ * gitignored paths (data/, node_modules/).
+ *
+ * Known, accepted race: a file a human creates *during* the agent turn is
+ * indistinguishable from an agent leftover and is cleaned. The window is one
+ * agent turn, and the previous code had a strictly larger version of the same
+ * exposure (it deleted every untracked path git reported, before the turn).
  */
 function revertAgentChanges(cwd: string): void {
+  execSafe('git reset -q HEAD -- .', { cwd });
   execSafe('git checkout -- .', { cwd });
-  const targetedCleanRoots = ['src/core/self-build/', '.githooks/'];
-  for (const root of targetedCleanRoots) {
-    try { execSync(`git clean -fd -- ${root}`, { cwd, stdio: 'pipe' }); } catch {}
-  }
+  execSafe('git clean -fd', { cwd });
 }
 
 function parseTestCount(vitestOutput: string): number {
@@ -455,32 +472,25 @@ export async function runSelfBuildTick(deps: SelfBuildDeps): Promise<TickResult>
   }
 
   // -------------------------------------------------------------------------
-  // Gate 8: Dirty-tree gate — clean up if dirty, then proceed
+  // Gate 8: Dirty-tree gate — a dirty tree is NOT self-build's to clean.
   // -------------------------------------------------------------------------
+  // This gate used to "clean up and proceed": an unscoped `git checkout -- .`
+  // followed by a `git clean -fd` of every untracked path git reported. On a
+  // shared checkout that is a silent, unrecoverable wipe of a human's
+  // uncommitted work, on every tick. Uncommitted content in the tree is
+  // either a human's WIP or the wreckage of a previous tick; neither is safe to
+  // delete unattended, so the tick is skipped and NOTHING is destroyed.
+  //
+  // This also establishes the invariant revertAgentChanges() depends on: past
+  // this point the tree is byte-identical to HEAD, so anything dirty later was
+  // produced by the agent and can be blanket-restored.
   const dirtyResult = execSafe('git status --porcelain', { cwd });
-  const isDirty = dirtyResult.stdout.trim().length > 0;
-  if (isDirty) {
-    log.warn({ porcelain: dirtyResult.stdout.slice(0, 200) }, 'self-build: dirty tree — cleaning before agent turn');
-    execSafe('git checkout -- .', { cwd });
-    // git checkout cannot remove untracked files (e.g. agent leftovers from a
-    // failed prior tick that landed outside the targeted clean roots). Without
-    // this, the recheck below stays dirty forever and every tick wedges in
-    // 'dirty-state'. Remove ONLY the untracked paths git reports (porcelain
-    // '?? '), never a blanket `git clean .`, so tracked content is untouched.
-    const untrackedAfterCheckout = execSafe('git status --porcelain', { cwd }).stdout
-      .split('\n')
-      .filter((l) => l.startsWith('?? '))
-      .map((l) => l.slice(3).trim())
-      .filter(Boolean);
-    for (const p of untrackedAfterCheckout) {
-      try { execSync(`git clean -fd -- ${JSON.stringify(p)}`, { cwd, stdio: 'pipe' }); } catch {}
-    }
-    // Re-check after cleanup
-    const recheckResult = execSafe('git status --porcelain', { cwd });
-    if (recheckResult.stdout.trim().length > 0) {
-      log.error({ porcelain: recheckResult.stdout.slice(0, 200) }, 'self-build: dirty tree persists after cleanup');
-      return { status: 'dirty-state', alignScore, budgetUsdToday };
-    }
+  if (dirtyResult.stdout.trim().length > 0) {
+    log.error(
+      { porcelain: dirtyResult.stdout.slice(0, 200) },
+      'self-build: dirty tree at tick start — skipping tick, nothing destroyed (commit or stash to unblock)',
+    );
+    return { status: 'dirty-state', alignScore, budgetUsdToday };
   }
 
   // -------------------------------------------------------------------------
@@ -649,7 +659,6 @@ export async function runSelfBuildTick(deps: SelfBuildDeps): Promise<TickResult>
         { file, realRelStaged },
         'self-build: staged protected path — reverting (pre-commit catch)',
       );
-      execSafe('git reset HEAD .', { cwd });
       revertAgentChanges(cwd);
       const updated = latchHalt(cwd, state, `S8: protected path staged: ${file}`);
       void updated;
@@ -666,7 +675,10 @@ export async function runSelfBuildTick(deps: SelfBuildDeps): Promise<TickResult>
   );
   if (commitResult.exitCode !== 0) {
     log.error({ stdout: commitResult.stdout.slice(0, 300) }, 'self-build: git commit failed');
-    execSafe('git checkout -- .', { cwd });
+    // The bare `git checkout -- .` that used to live here left the agent's work
+    // STAGED (git add -A ran just above) and its new files on disk, so the next
+    // tick found a dirty tree. Use the full restore-to-HEAD path.
+    revertAgentChanges(cwd);
     return { status: 'test-fail-reverted', message: 'git commit failed', alignScore, budgetUsdToday };
   }
 
