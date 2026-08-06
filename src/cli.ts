@@ -3247,22 +3247,10 @@ ${question}`, kb);
   // -------------------------------------------------------------------------
   // 7.7 SMS channel adapter (conditional)
   // -------------------------------------------------------------------------
-  if (channelOn(CHANNEL_DECLS.find((c) => c.id === 'sms')!, process.env)) {
+  const smsDecl = CHANNEL_DECLS.find((c) => c.id === 'sms')!;
+  if (channelOn(smsDecl, process.env)) {
     try {
-      const { SmsAdapter } = await import('./core/channels/sms.js');
-      const sms = new SmsAdapter();
-      registerOutboundAdapter(sms);
-      sms.setHookEmitter(hooks);      if (chatApprovals) approvalManager.registerSender('sms', sms);
-
-      // Feature 1 — register SMS FULLY on the shared gateway router (async, no
-      // streaming). Started at gateway finalize.
-      {
-        const { MessageRouter, setGlobalMessageRouter, getGlobalMessageRouter } = await import('./core/channels/router.js');
-        const gw = getGlobalMessageRouter() ?? new MessageRouter();
-        setGlobalMessageRouter(gw);
-        gw.registerAdapter(sms);
-      }
-      log.info('SMS registered on gateway router (started at gateway finalize)');
+      await smsDecl.start?.(channelRuntimeDeps, resolveTokenEnvKey(smsDecl, process.env));
     } catch (err) {
       log.warn({ err: String(err) }, 'SMS adapter failed to start (non-fatal)');
     }

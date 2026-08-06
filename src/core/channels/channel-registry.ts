@@ -116,7 +116,14 @@ export const GATEWAY_CHANNELS: readonly ChannelDeclaration[] = [
       deps.log.info('Email registered on gateway router (started at gateway finalize)');
     },
   },
-  { id: 'sms', tokenEnvKeys: ['TWILIO_ACCOUNT_SID'] },
+  {
+    id: 'sms', tokenEnvKeys: ['TWILIO_ACCOUNT_SID'],
+    async start(deps) {
+      const { SmsAdapter } = await import('./sms.js');
+      await wireAdapter('sms', new SmsAdapter(), deps);
+      deps.log.info('SMS registered on gateway router (started at gateway finalize)');
+    },
+  },
   { id: 'irc', tokenEnvKeys: ['IRC_SERVER'], requiresAllOf: ['IRC_SERVER', 'IRC_NICK'] },
   { id: 'matrix', tokenEnvKeys: ['MATRIX_HOMESERVER'], requiresAllOf: ['MATRIX_HOMESERVER', 'MATRIX_ACCESS_TOKEN'] },
   { id: 'signal', tokenEnvKeys: ['SIGNAL_PHONE_NUMBER'] },
