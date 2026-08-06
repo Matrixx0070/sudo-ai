@@ -79,6 +79,52 @@ DATA_DIR/device-identity.json                 fleet/device-identity.ts
 `signer.ts:48` already invented a private identity-root override. The concept
 exists; it is just unnamed and applied once.
 
+## Root cause found AFTER the above was written — read this first
+
+The TUI isolates `DATA_DIR` for one stated reason (`agent-loop-adapter.ts:71`):
+*"to avoid SQLite lock contention with the running daemon … The daemon holds
+audit.db / trust.db / veto-overrides.db open with write locks."*
+
+That requirement is **half true, and the true half is an oversight**. Measured
+`PRAGMA journal_mode`:
+
+| db | mode |
+|---|---|
+| `audit.db` | `wal` — readers never block |
+| `mind.db` | `wal` |
+| **`trust.db`** | **`delete`** — rollback journal; writers block readers cross-process |
+| **`veto-overrides.db`** | **`delete`** |
+
+The cause is two omitted lines in one function in `loop.ts`:
+
+```
+442:  new Database(path.join(dataDir, 'trust.db'));           // no pragma
+469:  new Database(path.join(dataDir, 'veto-overrides.db'));  // no pragma
+492:  new Database(mindPath);
+493:  try { fbDb.pragma('journal_mode = WAL'); } catch {}     // WAL, 24 lines later
+```
+
+`busy_timeout` is set in only four stores (`idempotency`, `prompt-report-store`,
+`trace-store`, `llm/logging`) — none of these three.
+
+So the causal chain for everything in this ADR is:
+
+> two missing pragmas → cross-process lock contention → the TUI repoints
+> `DATA_DIR` → `DATA_DIR` is also the credential root → credential resolution
+> depends on import-graph topology → a stale token silently serves turns
+
+**Consequence for this ADR.** Step 0 below (WAL + `busy_timeout` on the two
+stores) may remove the *reason* the TUI and bench isolate `DATA_DIR` at all. If
+their overrides can then be deleted, the identity/state conflation stops
+mattering for in-process callers, and this ADR's scope shrinks from four callers
+to the two where isolation is genuinely intentional — the eval sandbox (child
+process, clean state by design) and tenancy (different principal). Those two
+still need `identityPath()`; the TUI and bench may need nothing.
+
+Do **not** treat that as settled: it is not proven that WAL removes the observed
+contention, only that the named DBs lack the setting that would prevent it. Step
+0 must measure before anything is deleted.
+
 ## Alternatives
 
 **A. Do nothing.** Production is currently correct. Rejected: correctness rests
@@ -175,6 +221,15 @@ different model — which is exactly how this was found (a stale token in
 a probe entry point).
 
 ## Migration (each step ships independently, behaviour-neutral until step 4)
+
+0. **Fix the root cause first.** Add `journal_mode = WAL` + `busy_timeout` to
+   `loop.ts:442` (`trust.db`) and `loop.ts:469` (`veto-overrides.db`), matching
+   what line 493 already does for `mind.db`. Then **measure** whether the TUI
+   still contends with the daemon on a shared `data/`. If it does not, delete
+   the `DATA_DIR` override at `agent-loop-adapter.ts:82` and re-measure the
+   bench runner's. Every later step shrinks or disappears in proportion.
+   Converting a live DB the daemon holds open needs a maintenance window —
+   treat as an operational change, not a code-only one.
 
 1. Add `IDENTITY_DIR` + `identityPath()`, defaulting to today's value. **Zero**
    behaviour change. Add the sentinel test: identity does NOT follow a late
