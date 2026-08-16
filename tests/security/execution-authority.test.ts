@@ -197,6 +197,53 @@ describe('execution authority — containment is not a prompt', () => {
     }
   });
 
+  it('refuses pipe-producer and nested-wrapper evasions (review round 4)', () => {
+    for (const cmd of [
+      'printf / | xargs rm -rf',
+      "printf '%s\\n' / | xargs rm -rf",
+      'yes / | xargs rm -rf',
+      'sh -c "env bash -c \\"rm -rf /\\""',
+      'env bash -c "rm -rf /"',
+    ]) {
+      const d = authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd });
+      expect(d.proceed, `must refuse: ${cmd}`).toBe(false);
+      expect(d.requiresPrompt, `must not prompt: ${cmd}`).toBe(false);
+    }
+  });
+
+  it('does NOT refuse home-SUBPATH cleanup (round-4 false-positive class D3)', () => {
+    // Wiping the whole home dir stays banned; routine cache/build cleanup
+    // inside it must run, or the autonomy directive is broken in practice.
+    for (const cmd of [
+      'rm -rf ~/.cache',
+      'rm -rf ~/build',
+      'rm -rf $HOME/.cache/pip',
+      'rm -rf $HOME/node_modules',
+      'rm -rf ${HOME}/.npm/_cacache',
+      'rm -rf $HOMEBREW_CACHE',
+    ]) {
+      expect(authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd }).proceed,
+        `must run: ${cmd}`).toBe(true);
+    }
+    // …while the whole-home forms stay refused.
+    for (const cmd of ['rm -rf ~', 'rm -rf $HOME', 'rm -rf ${HOME}']) {
+      expect(authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd }).proceed,
+        `must refuse: ${cmd}`).toBe(false);
+    }
+  });
+
+  it('does NOT thread derived pipe producers (would wrongly refuse real work)', () => {
+    for (const cmd of [
+      'grep -rl foo /etc | xargs rm -rf',   // paths are grep's OUTPUT, not /etc
+      'find /opt/app -name "*.log" | xargs rm -f',
+      'ls /tmp/old | xargs rm -rf',
+      'echo /tmp/old | xargs rm -rf',
+    ]) {
+      expect(authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd }).proceed,
+        `must run: ${cmd}`).toBe(true);
+    }
+  });
+
   it('does NOT over-block legitimate work (over-blocking breaks the directive)', () => {
     for (const cmd of [
       'mkfs.ext4 /tmp/loop.img',        // loopback image — refused by the old bare `mkfs.` ban

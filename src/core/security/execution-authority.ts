@@ -266,20 +266,20 @@ function normalisePath(p: string): string {
 export function normalizeForAnalysis(command: string): string {
   let out = command.trim();
 
-  // Neutral prefixes add nothing to the analysis. Applied repeatedly so
-  // `sudo env nohup rm -rf /` collapses all the way down.
-  for (let i = 0; i < 4; i++) {
+  // Neutral prefixes and shell wrappers are peeled ALTERNATELY to a fixed
+  // point: stripping once then unwrapping once missed a prefix revealed
+  // inside the unwrapped payload (`sh -c "env bash -c \\"rm -rf /\\""` —
+  // adversarial review round 4, defect D2).
+  for (let i = 0; i < 6; i++) {
     const before = out;
     out = out.replace(/^(sudo|doas|env|nohup|stdbuf|command|ionice|nice)\s+(-{1,2}[A-Za-z][\w-]*(=\S+)?\s+)*/, '');
     out = out.replace(/^timeout\s+(-{1,2}\S+\s+)*[\d.]+[smhd]?\s+/, '');
-    if (out === before) break;
-  }
-
-  // Unwrap `bash -c "..."` / `sh -c '...'` (two levels is plenty).
-  for (let i = 0; i < 2; i++) {
     const m = /^(?:\/bin\/)?(?:ba|z|k)?sh\s+-[a-zA-Z]*c\s+(['"])([\s\S]*)\1\s*$/.exec(out.trim());
-    if (!m || m[2] === undefined) break;
-    out = m[2].trim();
+    if (m && m[2] !== undefined) {
+      // Un-escape the payload's own quotes so a nested wrapper is visible.
+      out = m[2].trim().replace(/\\(['"])/g, '$1');
+    }
+    if (out === before) break;
   }
 
   // `${VAR}` → `$VAR` so the audited `$HOME` ban applies to both spellings.
@@ -349,8 +349,19 @@ export function isCatastrophicCommand(command: string): boolean {
       let k = 0;
       while (k < rest.length && /^-/.test(unquote(rest[k] ?? ''))) k++;
       const inner = rest.slice(k);
+      // Operands arriving over the pipe. Only STATIC emitters are threaded —
+      // echo/printf/yes literally reproduce their arguments. Producers whose
+      // output is derived (find, ls, grep) are deliberately NOT threaded, or
+      // `grep -rl foo /etc | xargs rm -rf` would be wrongly refused.
       const prevTokens = (segments[i - 1] ?? '').split(/\s+/).filter(Boolean);
-      const piped = unquote(prevTokens[0] ?? '') === 'echo' ? prevTokens.slice(1) : [];
+      const producer = unquote(prevTokens[0] ?? '');
+      let piped: string[] = [];
+      if (producer === 'echo' || producer === 'yes') {
+        piped = prevTokens.slice(1);
+      } else if (producer === 'printf') {
+        // Drop a leading format string (`printf '%s\n' /`).
+        piped = prevTokens.slice(1).filter((t) => !/%/.test(unquote(t)));
+      }
       tokens = [...inner, ...piped];
       segment = tokens.join(' ');
       head = unquote(tokens[0] ?? '');

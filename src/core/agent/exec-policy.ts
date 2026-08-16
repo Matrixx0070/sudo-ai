@@ -61,8 +61,12 @@ export const DANGEROUS_PREFIXES: ReadonlyArray<BannedEntry> = Object.freeze([
   // — verifier MED #1. Drops `rm -rf /*/subdir` from the ban but still
   // catches `rm -rf /* && ...`, `rm -rf /*;`, and a bare `rm -rf /*`.
   { match: 'rm -rf /*', mode: 'terminated' },
-  { match: 'rm -rf ~', mode: 'literal' },
-  { match: 'rm -rf $HOME', mode: 'literal' },
+  // `terminated`, not `literal`: wiping the whole home directory is banned,
+  // but SUBPATHS must stay deletable — `rm -rf ~/.cache`, `rm -rf $HOME/build`
+  // and `rm -rf $HOMEBREW_CACHE` are routine work an autonomous agent must be
+  // able to do (adversarial review round 4, false-positive class D3).
+  { match: 'rm -rf ~', mode: 'terminated' },
+  { match: 'rm -rf $HOME', mode: 'terminated' },
   { match: 'rm -fr /', mode: 'terminated' },
   { match: 'rm -fr /*', mode: 'terminated' },
   { match: 'rm --recursive --force /', mode: 'terminated' },

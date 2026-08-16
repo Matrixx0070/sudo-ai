@@ -99,10 +99,21 @@ and therefore still apply:
    `$(echo …)`/`$(printf …)` substitution, and pipe forms
    (`echo / | xargs rm -rf`).
 
-   **Honest limit:** static analysis cannot resolve arbitrary runtime
-   expansion — `rm -rf $(pwd)` with the shell already at `/` is not
-   detectable here. This layer is a cheap-evasion backstop underneath the
-   bwrap sandbox, not a security boundary.
+   **Honest limits** (known and accepted, not oversights):
+   - Static analysis cannot resolve arbitrary runtime expansion —
+     `rm -rf $(pwd)` with the shell already at `/` is not detectable here.
+   - Pipe operands are threaded only from *static* emitters (`echo`,
+     `printf`, `yes`). Derived producers (`find`, `ls`, `grep`) are not
+     threaded on purpose: doing so would refuse
+     `grep -rl foo /etc | xargs rm -rf`, where `/etc` is the search root, not
+     the deletion target.
+   - `docker run … rm -rf /` is refused even though it targets a container
+     filesystem. Kept deliberately: a bind mount (`-v /:/host`) makes the
+     container form genuinely host-destructive, and container arguments are
+     not statically distinguishable.
+
+   This layer is a cheap-evasion backstop underneath the bwrap sandbox, not a
+   security boundary.
 
 Ordinary destructive work is explicitly **not** catastrophic and runs freely:
 `rm -rf /tmp/build`, `rm -rf node_modules`, `apt-get install`, `systemctl
