@@ -255,3 +255,44 @@ primary session. Dispatch only bounded adversarial verification of finished work
 3. Redo #1107 (`CREDENTIAL_DIR`) — asserts on the wrong constant; it is the root cause of
    this mission's original bug chain.
 4. #1114 — owner decision (public repo, concentrates a map of safety-guard posture).
+
+## CORRECTION (2026-08-16, later) — the branch-switcher is a TEST, and main is green
+
+Triage of "7 failing test files on main" (from the 17:36 `/tmp/verify-wt` run). All
+measured, no agents:
+
+**Main is fully green.** Fresh worktree at `0a3432eb`, `GH_CONFIG_DIR` pointed at an
+empty dir: **1093/1093 test files, 13,171 tests passed, 0 failures.** The 7 "failing"
+files (bash-allowlist, gateway-turn-handler, deps-freshness, restart-sentinel,
+embeddings-backoff, agent-loop, whisper-stt) all pass on clean main.
+
+**Root cause of every mass-failure run:** `src/core/self-build/auto-fix-trigger.test.ts`
+→ "should allow processing when kill-switch is not set" calls the real
+`trigger.processIssue(123)`. Its comment assumes "gh CLI … will fail in test env" — but
+on this host `gh` is authenticated, so it fetches real issue #123 ("feat: ACP …"),
+passes the mocked gates (`suggestFix` mocked non-null), and runs a **real
+`git checkout`** (`createBranch` → fallback plain checkout of the existing
+`auto-fix/123-feat-acp-agent-client-protocol`, last committed at `cd153dd5`, months old)
+**in whatever checkout the suite runs in**, ~20 s into every run. The rest of the suite
+then executes against a mixed/ancient tree → arbitrary failures (7 files at 17:36; 378
+at 17:31; 365 in another run — count depends on timing). The test itself stays green
+(its assertion is only `reason !== 'disabled'`).
+
+Proven by execution: running only that file in a fresh worktree logged
+`tool:github "Creating branch auto-fix/123-feat-acp-agent-client-protocol"` and
+attempted the checkout (blocked only because another worktree held the branch).
+Reflog: it switched the **live checkout** main→`cd153dd5` at 17:30:16 during the
+verify.log run (restored 17:32:31). This — not the dormant daemon — is the mechanism
+behind "auto-fix switches branches in the live checkout" (16 reflog entries) and the
+"Aug 6 one-off": the earlier correction was right that the daemon lane is dormant, but
+wrong to conclude the hazard is gone. It fires from the test suite on any
+gh-authenticated host. CI is green because CI's `gh` is unauthenticated → fetch fails →
+checkout never runs.
+
+**Fix (small, not yet done):** mock `child_process` in that test file the way
+`tests/dev/github-create-branch.test.ts` already does (or stub `createBranch`), and
+strengthen the assertion. Belt-and-braces: vitest setup could set
+`GH_CONFIG_DIR=<empty>` so no test can reach the real GitHub/git boundary silently.
+
+Interim rule: do not run the suite in the live checkout or any checkout you care about
+until this test is fixed (worktree + neutered `gh` is safe).
