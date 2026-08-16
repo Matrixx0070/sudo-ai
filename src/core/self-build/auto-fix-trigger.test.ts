@@ -12,6 +12,21 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// Mock child_process BEFORE importing the module under test: unmocked,
+// processIssue() reaches the REAL gh CLI and on an authenticated host runs a
+// REAL `git checkout` in the suite's own checkout (2026-08-16 suite poisoning).
+// execCalls records every command so tests can assert the exec boundary.
+const execCalls: string[] = [];
+let execImpl: (cmd: string, cb: (e: Error | null, out?: unknown) => void) => void = (_cmd, cb) =>
+  cb(new Error('gh: command not found (mocked test env)'));
+vi.mock('child_process', () => ({
+  exec: (cmd: string, cb: (e: Error | null, out?: unknown) => void) => {
+    execCalls.push(cmd);
+    execImpl(cmd, cb);
+  },
+}));
+
 import { AutoFixTrigger, type AutoFixTriggerDeps } from './auto-fix-trigger.js';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +72,8 @@ function createTestDeps(overrides?: Partial<AutoFixTriggerDeps>): AutoFixTrigger
 describe('AutoFixTrigger', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    execCalls.length = 0;
+    execImpl = (_cmd, cb) => cb(new Error('gh: command not found (mocked test env)'));
     // Reset environment
     delete process.env['SUDO_AUTOFIX_DISABLE'];
     delete process.env['SUDO_AUTOFIX_MAX_PER_HOUR'];
@@ -175,12 +192,43 @@ describe('AutoFixTrigger', () => {
       // Mock suggestFix to return a fix
       mockErrorMemory.suggestFix.mockReturnValue('Add null check');
 
-      // processIssue will try to fetch via gh CLI which will fail in test env
-      // but we verify it doesn't return 'disabled' reason
+      // The mocked gh CLI fails, so the pipeline stops at the fetch gate —
+      // past the kill-switch, before any git mutation.
       const result = await trigger.processIssue(123);
 
-      // Should pass kill-switch gate (may fail on fetch due to no gh CLI in test)
-      expect(result.reason).not.toBe('disabled');
+      expect(result).toEqual({ success: false, reason: 'fetch-failed' });
+      // The exec boundary saw only the gh fetch — never git.
+      expect(execCalls.some((c) => c.includes('gh issue view 123'))).toBe(true);
+      expect(execCalls.some((c) => /(^|[\s;&|])git[\s-]/.test(c))).toBe(false);
+    });
+
+    it('never reaches the real exec boundary — full happy path stays mocked (regression: live checkout switch)', async () => {
+      delete process.env['SUDO_AUTOFIX_DISABLE'];
+
+      const mockGet = vi.fn().mockReturnValue({ count: 0 });
+      mockMindDb.prepare.mockReturnValue({ get: mockGet, run: vi.fn(), all: vi.fn() } as never);
+      mockErrorMemory.suggestFix.mockReturnValue('Add null check');
+
+      // Drive the ENTIRE pipeline (fetch → gates → createBranch → PR) through
+      // the mock: a realistic eligible issue, then success for every command.
+      const issue = {
+        number: 123,
+        title: 'feat: ACP (Agent Client Protocol) stdio agent',
+        body: 'CRITICAL error at src/core/health/error-memory.ts:42',
+        labels: [{ name: 'CRITICAL' }, { name: 'auto-fix' }],
+        state: 'open',
+        createdAt: '',
+        updatedAt: '',
+      };
+      execImpl = (cmd, cb) => {
+        if (cmd.includes('gh issue view')) cb(null, { stdout: JSON.stringify(issue), stderr: '' });
+        else cb(null, { stdout: '', stderr: '' });
+      };
+
+      const trigger = new AutoFixTrigger(createTestDeps());
+      await trigger.processIssue(123);
+      // The dangerous commands ran — but only against the mock.
+      expect(execCalls.some((c) => c.includes('git checkout -b'))).toBe(true);
     });
   });
 
