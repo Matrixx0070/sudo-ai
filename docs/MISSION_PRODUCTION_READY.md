@@ -324,3 +324,21 @@ tool for bounded verification jobs.
 Restart-cause histogram measured 2026-08-16: 99 exits lifetime = 93 SIGINT/code-0
 (intentional deploys), 3 SIGKILL (watch: possible shutdown hangs), 3 SIGINT/code-1.
 No crash loop. The "32 restarts" pm2 counter is operational history, not instability.
+
+## X5 PROVIDER MATRIX — measured 2026-08-16 ~19:00Z (all through the live daemon or its own endpoints)
+
+| lane | result | proof |
+|---|---|---|
+| claude-oauth (SUDO_DEFAULT_MODEL claude-opus-4-8; +haiku/sonnet/fable/opus-5 seen live) | ✅ | Telegram E2E replies 18:24/18:25 route through it |
+| openai (API key) | ✅ 876 ms | `POST /v1/admin/models/providers/openai/test` → connected |
+| google gemini (API key) | ✅ 145 ms | same endpoint → connected |
+| ollama `glm-5.2:cloud` | ✅ 461 ms | live `/api/generate` → replied "ok" (ollama 0.24.0) |
+| **xai (API key)** | ❌ **DEAD — HTTP 400 "Incorrect API key"** | provider test endpoint | 
+| anthropic (API key) | — not configured (422 no key) | by design: claude-oauth covers Anthropic; metered key lane previously recorded dead |
+| grok-web seat ($0 cookie lane) | ⚠️ degraded: `oauth-credentials=degraded, statsig-minting=degraded` | checkGrokSeat() direct run 19:03Z; NOT needs-login; owner-gated lane, untouched |
+| gemini-web session lane | UNVERIFIED (API-key lane healthy; web lane not probed) | — |
+
+**Owner actions:** (1) new `XAI_API_KEY` from console.x.ai — the Grok API lane is dead
+until then; (2) grok-web seat wants its owner-gated refresh (degraded, not down).
+
+X5 status: ✅ measured (2 owner actions pending to make it all-green).
