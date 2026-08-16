@@ -126,6 +126,33 @@ on the real host. Every other caller keeps it:
 Each bypass logs at `warn`: `GOD MODE: owner-verified command bypassing the
 sandbox — executing on the real host`.
 
+### What god mode costs — read this before enabling it
+
+Adversarial review (2026-08-16) named the real trade-off, and it is not a code
+defect but a consequence of the directive:
+
+**A prompt injection during a legitimate owner turn now reaches the host.**
+The turn is owner-attributed, but the CONTENT the model acts on — a fetched
+web page, an email, a repo file, tool output — may be attacker-controlled.
+Before god mode, injected instructions were contained by the sandbox and
+refused by the catastrophic list. Under god mode, on an owner turn, both
+layers are lifted. One successful injection is arbitrary host access.
+
+That is the price of "god-level access to the system it lives on", and it is
+why owner attribution is the only thing standing between the model and the
+machine. Consequences:
+
+- **Owner attribution must be exact.** Web chat previously marked EVERY turn
+  `isOwner: true` while skipping auth on loopback/LAN — behind a reverse proxy
+  that made any caller the owner. Now web chat confers owner status only when
+  the request proves `WEB_CHAT_TOKEN`; loopback/LAN admission still works, but
+  admission is not ownership.
+- **Keep god mode off where owner attribution is weak** — any proxied or
+  non-loopback deployment without a real owner-id match.
+- `agent.command` driven by external Grok text (`SUDO_GROK_WEB_MCP_COMMAND=1`,
+  default off) runs owner-attributed: under god mode that is host-level. Leave
+  it off unless the input path is trusted.
+
 ### Contained runs must say they are contained
 
 The same incident exposed a reporting defect: a sandboxed write was described

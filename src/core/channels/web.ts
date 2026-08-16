@@ -253,6 +253,12 @@ export class WebAdapter implements ChannelAdapter {
     log.info({ peerId, flushed: fresh.length }, 'Web: flushed buffered replies to reconnected client');
   }
 
+  /**
+   * True when the most recent inbound HTTP request proved WEB_CHAT_TOKEN.
+   * Owner attribution only — never admission (see the auth block).
+   */
+  private _lastRequestOwnerProven = false;
+
   onMessage(handler: MessageHandler): void {
     this._handler = handler;
   }
@@ -544,19 +550,29 @@ export class WebAdapter implements ChannelAdapter {
     const requiredToken = resolveEnvSecret('WEB_CHAT_TOKEN') ?? '';
     const clientIp = (req.socket as { remoteAddress?: string } | null)?.remoteAddress;
     const isLocalDev = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost' || clientIp?.startsWith('192.168.') || clientIp?.startsWith('10.');
-    if (requiredToken && !isLocalDev) {
-      let parsedUrl: URL;
+
+    // OWNER ATTRIBUTION (separate from admission). Presenting the configured
+    // token is the ONLY thing that proves the owner here. The loopback/LAN
+    // convenience below still ADMITS the request, but it must never confer
+    // owner status: a reverse proxy makes every remote client look like
+    // 127.0.0.1, and under god mode an owner-attributed web turn executes on
+    // the real host. Adversarial review 2026-08-16, CONCERN 1.
+    let tokenProven = false;
+    {
+      let parsed: URL;
       try {
-        parsedUrl = new URL(rawUrl, `http://${req.headers['host'] ?? 'localhost'}`);
+        parsed = new URL(rawUrl, `http://${req.headers['host'] ?? 'localhost'}`);
       } catch {
-        parsedUrl = new URL('/', 'http://localhost');
+        parsed = new URL('/', 'http://localhost');
       }
-      const providedToken = extractToken(req, parsedUrl);
-      if (!safeTokenEqual(providedToken, requiredToken)) {
-        res.writeHead(401, { 'Content-Type': 'text/plain' });
-        res.end('Unauthorized. Provide Authorization: Bearer <token> header or ?token=YOUR_TOKEN in the URL.');
-        return;
-      }
+      tokenProven = requiredToken.length > 0 && safeTokenEqual(extractToken(req, parsed), requiredToken);
+    }
+    this._lastRequestOwnerProven = tokenProven;
+
+    if (requiredToken && !isLocalDev && !tokenProven) {
+      res.writeHead(401, { 'Content-Type': 'text/plain' });
+      res.end('Unauthorized. Provide Authorization: Bearer <token> header or ?token=YOUR_TOKEN in the URL.');
+      return;
     }
 
     // -----------------------------------------------------------------------
@@ -744,6 +760,9 @@ export class WebAdapter implements ChannelAdapter {
       peerName: peerId,
       chatType: 'dm',
       text,
+      // Owner only when the request proved the token — a loopback/LAN
+      // admission bypass must not grant owner power (god mode reads this).
+      isOwner: this._lastRequestOwnerProven,
       timestamp: new Date(),
       ...(media && media.length ? { media } : {}),
     };

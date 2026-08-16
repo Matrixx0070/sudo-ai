@@ -3056,10 +3056,14 @@ ${question}`, kb);
           // Emit the initial "waiting" phase immediately so the SPA shows the live
           // state (and chip) before the first token arrives.
           if (webStreaming) void web.send(msg.peerId, liveTracker.initialFrame()).catch(() => { /* ws closed */ });
-          // Web chat is gated by WEB_CHAT_TOKEN — its driver is the owner. Bind
-          // that to the turn so owner-only browser profiles (e.g. personal) are
-          // launchable here. Turn-scoped via AgentState (no shared registry).
-          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '', onWebEvent, { race: true, caller: { isOwner: true, channel: 'web', peerId: msg.peerId } });
+          // Owner attribution comes from the adapter, which sets isOwner only
+          // when the request PROVED WEB_CHAT_TOKEN. It used to be hardcoded
+          // true for every web turn, while the adapter skips auth for
+          // loopback/LAN — behind a reverse proxy that made any client the
+          // owner, and under god mode an owner web turn runs on the real host
+          // (adversarial review 2026-08-16, CONCERN 1).
+          const webIsOwner = msg.isOwner === true;
+          const webResult = await finalAgentLoop.run(String(session.id), msg.text ?? '', onWebEvent, { race: true, caller: { isOwner: webIsOwner, channel: 'web', peerId: msg.peerId } });
           if (runGenerations.isStale(convKey, runGen)) {
             log.info({ peerId: msg.peerId }, 'Run generation changed mid-turn (e.g. /reset) — discarding stale reply');
             return;
