@@ -13,12 +13,9 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// Mock child_process BEFORE importing the module under test. Without this,
-// processIssue() reaches the REAL `gh` CLI and, on a host where gh is
-// authenticated, fetches a real issue and runs a REAL `git checkout` in the
-// checkout the suite runs in (observed 2026-08-16: every full-suite run
-// switched its checkout to auto-fix/123-… ~20s in, poisoning the remaining
-// test files — including the live /root/sudo-ai-v4 checkout).
+// Mock child_process BEFORE importing the module under test: unmocked,
+// processIssue() reaches the REAL gh CLI and on an authenticated host runs a
+// REAL `git checkout` in the suite's own checkout (2026-08-16 suite poisoning).
 // execCalls records every command so tests can assert the exec boundary.
 const execCalls: string[] = [];
 let execImpl: (cmd: string, cb: (e: Error | null, out?: unknown) => void) => void = (_cmd, cb) =>
@@ -228,15 +225,10 @@ describe('AutoFixTrigger', () => {
         else cb(null, { stdout: '', stderr: '' });
       };
 
-      await trigger_processIssue_fullPath();
-
-      async function trigger_processIssue_fullPath() {
-        const deps = createTestDeps();
-        const trigger = new AutoFixTrigger(deps);
-        await trigger.processIssue(123);
-        // The dangerous commands ran — but only against the mock.
-        expect(execCalls.some((c) => c.includes('git checkout -b'))).toBe(true);
-      }
+      const trigger = new AutoFixTrigger(createTestDeps());
+      await trigger.processIssue(123);
+      // The dangerous commands ran — but only against the mock.
+      expect(execCalls.some((c) => c.includes('git checkout -b'))).toBe(true);
     });
   });
 
