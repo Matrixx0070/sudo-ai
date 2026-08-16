@@ -152,8 +152,13 @@ export function authorize(req: AuthorityRequest): AuthorityDecision {
   // keeps its power in autonomous mode. An adversarial review found that
   // short-circuiting before it silently replaced ~20 audited entries with the
   // handful of patterns below — a capability regression, not a simplification.
+  // Both containment layers analyse the SAME normalised string, or a wrapper
+  // like `bash -c "..."` / `${HOME}` would hide intent from one of them.
+  const normalisedCommand =
+    req.command !== undefined ? normalizeForAnalysis(req.command) : undefined;
   const dangerous =
-    req.command !== undefined && isDangerousCommand(req.action, { command: req.command });
+    normalisedCommand !== undefined &&
+    isDangerousCommand(req.action, { command: normalisedCommand });
 
   if (req.command && (dangerous || isCatastrophicCommand(req.command)) && !catastrophicRefusalLifted()) {
     log.error(
@@ -240,10 +245,57 @@ function operandsOf(tokens: string[]): string[] {
 
 /** Normalise a path operand for protected-root comparison. */
 function normalisePath(p: string): string {
-  if (p === '/') return '/';
+  if (p === '/' || p === '//') return '/';
+  // `/etc/../` resolves to `/` — a protected root reached by traversal.
+  const resolved = p.includes('..') ? resolveDots(p) : p;
+  if (resolved === '/') return '/';
   // Collapse a trailing slash so `/etc/` compares equal to `/etc`.
-  const trimmed = p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p;
-  return trimmed;
+  return resolved.length > 1 && resolved.endsWith('/') ? resolved.slice(0, -1) : resolved;
+}
+
+/**
+ * Normalise a command before analysis so trivial wrappers and expansions
+ * cannot hide intent (adversarial review 2026-08-16 defeated the first parser
+ * with `bash -c "rm -rf /"`, `${HOME}`, `` `echo /` ``, and `/etc/../`).
+ *
+ * Static analysis can never resolve every runtime expansion — `rm -rf $(pwd)`
+ * depends on the working directory. This is a best-effort backstop layered
+ * under the bwrap sandbox, not a security boundary; it closes the cheap,
+ * obvious evasions of the audited bans.
+ */
+export function normalizeForAnalysis(command: string): string {
+  let out = command.trim();
+
+  // `sudo`/`doas`/`env` prefixes add nothing to the analysis.
+  out = out.replace(/^(sudo|doas)\s+(-[A-Za-z]+\s+)*/, '');
+
+  // Unwrap `bash -c "..."` / `sh -c '...'` (two levels is plenty).
+  for (let i = 0; i < 2; i++) {
+    const m = /^(?:\/bin\/)?(?:ba|z|k)?sh\s+-[a-zA-Z]*c\s+(['"])([\s\S]*)\1\s*$/.exec(out.trim());
+    if (!m || m[2] === undefined) break;
+    out = m[2].trim();
+  }
+
+  // `${VAR}` → `$VAR` so the audited `$HOME` ban applies to both spellings.
+  out = out.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, '$$$1');
+
+  // Resolve trivially-static substitutions: `$(echo X)` / `` `echo X` ``.
+  out = out.replace(/\$\(\s*echo\s+([^)]*)\)/g, '$1');
+  out = out.replace(/`\s*echo\s+([^`]*)`/g, '$1');
+
+  return out;
+}
+
+/** Collapse `.` and `..` segments so `/etc/../` resolves to `/`. */
+function resolveDots(p: string): string {
+  if (!p.startsWith('/')) return p;
+  const out: string[] = [];
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') out.pop();
+    else out.push(seg);
+  }
+  return '/' + out.join('/');
 }
 
 /**
@@ -256,7 +308,9 @@ function normalisePath(p: string): string {
 export function isCatastrophicCommand(command: string): boolean {
   if (!command || typeof command !== 'string') return false;
 
-  for (const segment of splitSegments(command)) {
+  const normalised = normalizeForAnalysis(command);
+
+  for (const segment of splitSegments(normalised)) {
     const tokens = segment.split(/\s+/).filter(Boolean);
     if (tokens.length === 0) continue;
     const head = unquote(tokens[0] ?? '');
@@ -271,8 +325,21 @@ export function isCatastrophicCommand(command: string): boolean {
       for (const operand of operandsOf(tokens)) {
         if (PROTECTED_ROOTS.has(normalisePath(operand))) return true;
         // `rm -rf *` is catastrophic only when the shell was moved to / first.
-        if ((operand === '*' || operand === './*') && cwdIsRoot(command, segment)) return true;
+        if ((operand === '*' || operand === './*') && cwdIsRoot(normalised, segment)) return true;
       }
+    }
+
+    // `chmod -R <any> /` / `chown -R <any> /` — bricks the system just as
+    // thoroughly as deleting it (the audited list only covered mode 777).
+    if ((head === 'chmod' || head === 'chown') && tokens.some((t) => /^-[a-zA-Z]*R/.test(unquote(t)))) {
+      const paths = operandsOf(tokens).filter((t) => t.startsWith('/'));
+      if (paths.some((t) => PROTECTED_ROOTS.has(normalisePath(t)))) return true;
+    }
+
+    // Moving a protected root away is equivalent to deleting it.
+    if (head === 'mv') {
+      const paths = operandsOf(tokens);
+      if (paths.length > 1 && paths.slice(0, -1).some((t) => PROTECTED_ROOTS.has(normalisePath(t)))) return true;
     }
 
     // `find / -delete` / `find / -exec rm -rf {}` — a slower `rm -rf /`.

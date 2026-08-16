@@ -153,6 +153,47 @@ describe('execution authority — containment is not a prompt', () => {
     }
   });
 
+  it('refuses wrapper / expansion / traversal evasions (review round 2)', () => {
+    for (const cmd of [
+      'bash -c "rm -rf /"',
+      "sh -c 'rm -rf /'",
+      '/bin/bash -c "rm -rf /"',
+      'sudo rm -rf /',
+      'rm -rf ${HOME}',
+      'rm -rf `echo /`',
+      'rm -rf $(echo /)',
+      'rm -rf /etc/../',
+      'rm -rf /var/../',
+      'chmod -R 000 /',
+      'chmod -R 755 /',
+      'chown -R nobody /',
+      'mv /etc /tmp',
+    ]) {
+      const d = authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd });
+      expect(d.proceed, `must refuse: ${cmd}`).toBe(false);
+      expect(d.requiresPrompt, `must not prompt: ${cmd}`).toBe(false);
+    }
+  });
+
+  it('does NOT over-block legitimate work (over-blocking breaks the directive)', () => {
+    for (const cmd of [
+      'mkfs.ext4 /tmp/loop.img',        // loopback image — refused by the old bare `mkfs.` ban
+      'mkfs -t ext4 /tmp/loop.img',
+      'chmod -R 755 /opt/app',
+      'chown -R www-data /var/www',
+      'mv /tmp/a /tmp/b',
+      'mv /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak',
+      'bash -c "rm -rf /tmp/build"',
+      'rm -rf /root/sudo-ai-v4/dist',
+      'docker system prune -af',
+      'git clean -xfd',
+      'npm ci',
+    ]) {
+      const d = authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd });
+      expect(d.proceed, `must run: ${cmd}`).toBe(true);
+    }
+  });
+
   it('keeps the hardened DANGEROUS_PREFIXES force-deny alive in autonomous mode', () => {
     // These come from exec-policy's audited list, not the local regexes —
     // the review caught the autonomy bypass silently disabling them.
