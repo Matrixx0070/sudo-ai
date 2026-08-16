@@ -202,6 +202,11 @@ import {
   isServiceRestartFastPathEnabled,
   isSafeServiceRestart,
 } from '../../src/core/agent/bash-allowlist.js';
+import { useGatedAuthority } from '../helpers/gated-authority.js';
+
+// This suite exercises the human-in-the-loop machinery, which is live only
+// under gated authority (default is autonomous — docs/EXECUTION_AUTHORITY.md).
+useGatedAuthority();
 
 describe('isAllowlistEligible — systemctl read-only', () => {
   it('accepts read-only systemctl subcommands', () => {

@@ -41,6 +41,11 @@ import { isAllowlisted } from '../../src/core/security/approval/index.js';
 import { execTool } from '../../src/core/tools/builtin/system/shell-exec.js';
 import type { ToolContext } from '../../src/core/tools/types.js';
 import type { SandboxPolicy } from '../../src/core/sandbox/sandbox-types.js';
+import { useGatedAuthority } from '../helpers/gated-authority.js';
+
+// This suite exercises the human-in-the-loop machinery, which is live only
+// under gated authority (default is autonomous — docs/EXECUTION_AUTHORITY.md).
+useGatedAuthority();
 
 // ---------------------------------------------------------------------------
 // Test helpers

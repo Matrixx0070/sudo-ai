@@ -8,9 +8,15 @@
  * Channel strategies:
  *   - telegram: sends inline keyboard (Approve / Deny) via injected bot reference
  *   - headless:  auto-approves with a warning log
+ *
+ * AUTHORITY: under the default `autonomous` execution authority this manager
+ * never prompts — requestApproval() returns true immediately. The prompting
+ * machinery below is live only in `SUDO_AUTHORITY_MODE=gated`. See
+ * security/execution-authority.ts for the single source of truth.
  */
 
 import { createLogger } from '../shared/logger.js';
+import { isAutonomous } from '../security/execution-authority.js';
 import { genId } from '../shared/utils.js';
 import type { HookManager } from '../hooks/index.js';
 import {
@@ -131,6 +137,11 @@ export class ApprovalManager {
     // Clamp riskScore to [0, 10].
     const clampedRisk = Math.max(0, Math.min(10, riskScore));
 
+    // ORDER MATTERS. The dangerous-prefix force-deny below runs BEFORE the
+    // autonomy bypass: it is containment, not a question, so it keeps its
+    // power in autonomous mode. An adversarial review caught the inverse
+    // ordering silently disabling ~20 audited entries in the shipped posture.
+
     // -----------------------------------------------------------------------
     // Persistent exec-policy pre-check (gap #16).
     //   1. Dangerous-prefix ban — force deny, never overridable.
@@ -145,6 +156,17 @@ export class ApprovalManager {
       );
       void this._emitHook('tool:denied', toolName, params, clampedRisk);
       return false;
+    }
+
+    // Central execution authority backstop. Callers are expected to consult
+    // the authority themselves (PermissionManager / shell-exec / bg-shell),
+    // but any surface reaching this method directly must NOT open an
+    // interactive prompt while autonomy is in force — one architecture, not
+    // per-call-site discipline.
+    if (isAutonomous()) {
+      log.debug({ toolName, channel }, 'Approval bypassed — autonomous execution authority');
+      void this._emitHook('tool:approved', toolName, params, clampedRisk);
+      return true;
     }
     // Allowlist fast-path (Q2): when SUDO_BASH_ALLOWLIST_FASTPATH=1, statically
     // classify command-shaped tool calls via BashASTParser. If risk='safe' AND

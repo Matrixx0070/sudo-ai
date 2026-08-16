@@ -22,6 +22,11 @@ import {
 } from '../../src/core/workflows/index.js';
 import { GraphRunStore, runGovernedGraph, type BudgetAlert } from '../../src/core/orchestration/index.js';
 import { ApprovalManager } from '../../src/core/agent/approval.js';
+import { useGatedAuthority } from '../helpers/gated-authority.js';
+
+// This suite exercises the human-in-the-loop machinery, which is live only
+// under gated authority (default is autonomous — docs/EXECUTION_AUTHORITY.md).
+useGatedAuthority();
 
 let scratch: string;
 beforeAll(async () => {

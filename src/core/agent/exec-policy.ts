@@ -61,8 +61,12 @@ export const DANGEROUS_PREFIXES: ReadonlyArray<BannedEntry> = Object.freeze([
   // — verifier MED #1. Drops `rm -rf /*/subdir` from the ban but still
   // catches `rm -rf /* && ...`, `rm -rf /*;`, and a bare `rm -rf /*`.
   { match: 'rm -rf /*', mode: 'terminated' },
-  { match: 'rm -rf ~', mode: 'literal' },
-  { match: 'rm -rf $HOME', mode: 'literal' },
+  // `terminated`, not `literal`: wiping the whole home directory is banned,
+  // but SUBPATHS must stay deletable — `rm -rf ~/.cache`, `rm -rf $HOME/build`
+  // and `rm -rf $HOMEBREW_CACHE` are routine work an autonomous agent must be
+  // able to do (adversarial review round 4, false-positive class D3).
+  { match: 'rm -rf ~', mode: 'terminated' },
+  { match: 'rm -rf $HOME', mode: 'terminated' },
   { match: 'rm -fr /', mode: 'terminated' },
   { match: 'rm -fr /*', mode: 'terminated' },
   { match: 'rm --recursive --force /', mode: 'terminated' },
@@ -73,8 +77,11 @@ export const DANGEROUS_PREFIXES: ReadonlyArray<BannedEntry> = Object.freeze([
   { match: 'dd if=/dev/zero of=/dev/', mode: 'literal' },
   { match: 'dd if=/dev/random of=/dev/', mode: 'literal' },
   { match: 'dd if=/dev/urandom of=/dev/', mode: 'literal' },
-  { match: 'mkfs.', mode: 'literal' },
-  { match: 'mkfs -', mode: 'literal' },
+  // NB: `mkfs` is banned only against a DEVICE (see MKFS_DEVICE_RE below).
+  // The old bare `mkfs.` / `mkfs -` literals matched any target, which
+  // refused legitimate loopback-image work like `mkfs.ext4 /tmp/loop.img`
+  // — over-blocking ordinary sysadmin work (adversarial review 2026-08-16).
+  // Creating a filesystem on a regular file is not destructive.
   { match: 'chmod -R 777 /', mode: 'terminated' },
   { match: 'chown -R root /', mode: 'terminated' },
   // Block-device redirection — verifier MED #2 (broader than `> /dev/sda`).
@@ -118,6 +125,13 @@ function isTerminated(haystack: string, banned: string, idx: number): boolean {
 const PIPE_TO_SHELL_RE = /\|\s*(sh|bash|zsh|sudo\s+sh|sudo\s+bash)\b/;
 
 /**
+ * `mkfs`/`mkfs.<type>` aimed at a block device — formatting a real disk is
+ * unrecoverable. Targeting a regular file (loopback image) is not, and stays
+ * allowed: `mkfs.ext4 /tmp/loop.img` is normal container/VM work.
+ */
+const MKFS_DEVICE_RE = /\bmkfs(\.[a-z0-9]+)?\b[^|;]*\s\/dev\//;
+
+/**
  * Return true when the (tool, params) pair contains a banned command. The
  * pipe-to-shell check is only fired if the command also pipes to sh/bash/
  * sudo sh so legitimate one-off fetches (e.g. `curl https://x -o page.html`)
@@ -141,6 +155,8 @@ export function isDangerousCommand(toolName: string, params: Record<string, unkn
     }
     return true;
   }
+  if (MKFS_DEVICE_RE.test(command)) return true;
+
   // Tool-name-only bans could live here; today the list is empty but the
   // seam is here for future additions (e.g. ban `system.exec` outright).
   void toolName;

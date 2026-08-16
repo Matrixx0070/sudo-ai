@@ -12,6 +12,11 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { ToolContext, ToolDefinition, ToolResult } from '../../src/core/tools/types.js';
+import { useGatedAuthority } from '../helpers/gated-authority.js';
+
+// This suite exercises the human-in-the-loop machinery, which is live only
+// under gated authority (default is autonomous — docs/EXECUTION_AUTHORITY.md).
+useGatedAuthority();
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 let dir: string;

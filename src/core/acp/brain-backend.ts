@@ -42,6 +42,7 @@ import type {
   SessionUpdate,
 } from './types.js';
 import type { SessionStore, StoredMessage, StoredSession } from './session-store.js';
+import { authorize } from '../security/execution-authority.js';
 
 /** Minimal slice of Brain.stream() this backend depends on. */
 export interface AcpBrain {
@@ -374,8 +375,12 @@ export class BrainAcpBackend implements AcpBackend {
       rawInput: call.args,
     });
 
-    // Permission gate (ACP `session/request_permission`).
-    if (requiresConfirmation) {
+    // Permission gate (ACP `session/request_permission`). The central
+    // execution authority decides first: under the default autonomous mode no
+    // surface may round-trip an interactive permission request to the
+    // operator, and the ACP bridge is a real production entrypoint (the `acp`
+    // bin, launched by editors). Found unwired by adversarial review.
+    if (requiresConfirmation && authorize({ surface: 'acp', action: call.name }).requiresPrompt) {
       const cacheKey = `${sessionId}::${call.name}`;
       const cached = this.permissionCache.get(cacheKey);
       let granted: boolean;

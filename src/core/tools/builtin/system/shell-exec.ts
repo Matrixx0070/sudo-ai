@@ -27,6 +27,7 @@ import {
   waitForDecision,
   parseApprovalMode,
 } from '../../../security/approval/index.js';
+import { authorize } from '../../../security/execution-authority.js';
 import { runInSandbox } from '../../../sandbox/sandbox-runner.js';
 import { clampHeadTail } from '../../../shared/head-tail-buffer.js';
 import {
@@ -264,19 +265,46 @@ interface GateOptions {
   sandboxPolicy?: SandboxPolicy;
   /** Provisioned workspace dir for the sandbox. REQUIRED when sandboxPolicy.enabled is true. */
   workspaceDir: string;
+  /** True when the turn is attributable to the VERIFIED owner (god mode). */
+  ownerVerified?: boolean;
 }
 
 async function executeWithGate(opts: GateOptions): Promise<ToolResult> {
-  const { command, cwd, timeoutMs, sessionId, signal, sandboxPolicy, workspaceDir } = opts;
+  const { command, cwd, timeoutMs, sessionId, signal, sandboxPolicy, workspaceDir, ownerVerified } = opts;
   const start = Date.now();
 
   if (sandboxPolicy?.enabled && !workspaceDir) {
     throw new Error('workspaceDir required when sandbox enabled');
   }
 
+  // Central execution authority decides first. In the default autonomous mode
+  // no surface may prompt, so EXEC_APPROVAL_MODE is bypassed entirely (it
+  // stays authoritative in gated mode). Resolved per call — unlike the
+  // module-level APPROVAL_MODE const, a live posture change applies to the
+  // next command instead of requiring a daemon restart.
+  const authority = authorize({
+    surface: 'shell-exec',
+    action: 'system.exec',
+    command,
+    ownerVerified: ownerVerified === true,
+  });
+  if (!authority.proceed && !authority.requiresPrompt) {
+    logger.error(
+      { session: sessionId, command, reason: authority.reason },
+      'system.exec: refused by execution authority',
+    );
+    return {
+      success: false,
+      output: `Refused: ${command}\nWhole-system destruction is refused by containment policy ` +
+        `(no prompt was shown). Set SUDO_AUTHORITY_ALLOW_CATASTROPHIC=1 to lift.`,
+      data: { refused: true, reason: authority.reason, durationMs: Date.now() - start },
+    };
+  }
+
   const needsApproval =
-    APPROVAL_MODE === 'strict' ||
-    (APPROVAL_MODE === 'allowlist' && !isAllowlisted(command));
+    authority.requiresPrompt &&
+    (APPROVAL_MODE === 'strict' ||
+      (APPROVAL_MODE === 'allowlist' && !isAllowlisted(command)));
 
   if (!needsApproval) {
     logger.info({ session: sessionId, command, cwd, timeoutMs }, 'Executing shell command');
@@ -464,6 +492,9 @@ export const execTool: ToolDefinition = {
       signal: ctx.signal,
       sandboxPolicy: ctx.sandboxPolicy,
       workspaceDir: ctx.workspaceDir ?? ctx.workingDir,
+      // Owner attribution comes from the channel adapter's authenticated peer
+      // check — never from anything the model can set.
+      ownerVerified: ctx.isOwner === true,
     });
   },
 };

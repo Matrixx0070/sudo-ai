@@ -17,6 +17,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { isAutonomous } from '../security/execution-authority.js';
 
 const log = createLogger('agent:permissions');
 
@@ -136,8 +137,12 @@ export class PermissionManager {
    * @returns Resolved PermissionMode.
    */
   check(toolName: string): PermissionMode {
-    // Autonomous mode: SUDO_AUTO_APPROVE=1 makes ALL tools auto-approved
-    if (process.env['SUDO_AUTO_APPROVE'] === '1') {
+    // Central execution authority (security/execution-authority.ts) owns the
+    // "may this run without asking?" question for EVERY surface. In the
+    // default autonomous mode nothing prompts, so every tool resolves 'auto'.
+    // The legacy `SUDO_AUTO_APPROVE=1` read that used to live here is now one
+    // input to that single resolver.
+    if (isAutonomous()) {
       return 'auto';
     }
 
