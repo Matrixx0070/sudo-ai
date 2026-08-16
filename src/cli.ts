@@ -33,6 +33,7 @@ import { randomUUID } from 'node:crypto';
   }
 }
 import { createLogger } from './core/shared/logger.js';
+import { logAuthorityPosture } from './core/security/execution-authority.js';
 import { beginUserTurn, beginCronJob, isMachineBusy } from './core/agent/activity.js';
 import { requestMissionWake, setWakeDeps } from './core/agent/mission/wake.js';
 import { sanitizeUserFacingError } from './core/shared/sanitize-error.js';
@@ -6205,6 +6206,10 @@ ${question}`, kb);
   } catch (err) {
     log.warn({ err: String(err) }, 'Health watchdog failed to start — running without');
   }
+
+  // Disclose the resolved execution-authority posture once, at boot, so the
+  // operating mode is never a mystery in the logs (owner directive 2026-08-16).
+  logAuthorityPosture();
 
   // -------------------------------------------------------------------------
   // 9.9 IDE Bridge Adapter (VS Code / JetBrains extension protocol)

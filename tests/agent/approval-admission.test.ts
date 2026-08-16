@@ -13,6 +13,11 @@ import { describe, it, expect } from 'vitest';
 import { ApprovalManager } from '../../src/core/agent/approval.js';
 import type { ApprovalSender } from '../../src/core/agent/approval.js';
 import { KeyedAsyncQueue } from '../../src/core/sessions/queue.js';
+import { useGatedAuthority } from '../helpers/gated-authority.js';
+
+// This suite exercises the human-in-the-loop machinery, which is live only
+// under gated authority (default is autonomous — docs/EXECUTION_AUTHORITY.md).
+useGatedAuthority();
 
 function makeSender(): { sender: ApprovalSender; sent: string[] } {
   const sent: string[] = [];

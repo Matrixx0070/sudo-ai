@@ -14,6 +14,11 @@ import {
   DANGEROUS_PREFIXES,
 } from '../../src/core/agent/exec-policy.js';
 import { ApprovalManager } from '../../src/core/agent/approval.js';
+import { useGatedAuthority } from '../helpers/gated-authority.js';
+
+// This suite exercises the human-in-the-loop machinery, which is live only
+// under gated authority (default is autonomous — docs/EXECUTION_AUTHORITY.md).
+useGatedAuthority();
 
 function freshStore(): ExecPolicyStore {
   return new ExecPolicyStore(new Database(':memory:'));

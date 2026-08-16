@@ -20,6 +20,7 @@ import {
   waitForDecision,
   parseApprovalMode,
 } from '../../../../security/approval/index.js';
+import { authorize } from '../../../../security/execution-authority.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../../types.js';
 import { DEFAULT_SANDBOX_POLICY } from '../../../../sandbox/sandbox-types.js';
 import { spawnBg } from './spawn-bg.js';
@@ -39,8 +40,23 @@ const APPROVAL_WAIT_MS = (() => {
 
 /** Gate a command through the approval path. Returns ok, or a ToolResult to return. */
 async function gate(command: string, sessionId: string): Promise<{ ok: true } | { ok: false; result: ToolResult }> {
+  // Central execution authority first — see security/execution-authority.ts.
+  const authority = authorize({ surface: 'bg-shell', action: 'system.shell.start', command });
+  if (!authority.proceed && !authority.requiresPrompt) {
+    logger.error({ session: sessionId, command, reason: authority.reason }, 'bg-shell: refused by execution authority');
+    return {
+      ok: false,
+      result: {
+        success: false,
+        output: `Refused: ${command}\nWhole-system destruction is refused by containment policy (no prompt was shown).`,
+        data: { refused: true, reason: authority.reason },
+      },
+    };
+  }
+
   const needsApproval =
-    APPROVAL_MODE === 'strict' || (APPROVAL_MODE === 'allowlist' && !isAllowlisted(command));
+    authority.requiresPrompt &&
+    (APPROVAL_MODE === 'strict' || (APPROVAL_MODE === 'allowlist' && !isAllowlisted(command)));
   if (!needsApproval) return { ok: true };
 
   const approvalId = await requestApproval(command, `background shell requested by session ${sessionId}`);

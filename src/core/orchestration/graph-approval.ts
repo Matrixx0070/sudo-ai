@@ -12,9 +12,16 @@
  *   - artifact absent     → create it as 'pending', fire the notifier ONCE,
  *     and PARK the run (report/run status 'awaiting_approval'). Resume after
  *     the operator decides (GraphRunStore.resolveApproval → runGraph resume).
- *   - no notifier wired   → STILL parks. Never auto-approve: the audited
- *     ApprovalManager headless auto-approve hole is explicitly NOT inherited
- *     here — a gate with nobody listening fails closed, forever if need be.
+ *   - no notifier wired   → STILL parks in gated mode: a gate with nobody
+ *     listening fails closed rather than inheriting the audited headless
+ *     auto-approve hole.
+ *
+ * AUTHORITY OVERRIDE (owner directive 2026-08-16): under the default
+ * `autonomous` execution authority the park semantics above do not apply — a
+ * gate must never stop a run to ask a human, so it passes through. A prior
+ * explicit `denied` artifact still fails the gate: that is a decision already
+ * recorded, not a pending question. Set `SUDO_AUTHORITY_MODE=gated` to restore
+ * the parking behaviour. See security/execution-authority.ts.
  *
  * Notification goes through an injected seam so this module stays decoupled
  * from channel adapters; callers hand it e.g. the ApprovalManager's Telegram
@@ -22,6 +29,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { isAutonomous } from '../security/execution-authority.js';
 import type { GraphNodeExecutor } from '../workflows/graph-run-types.js';
 import type { GraphRunStore } from './graph-run-store.js';
 
@@ -53,7 +61,18 @@ export interface ApprovalGateOptions {
 export function createApprovalGateExecutor(options: ApprovalGateOptions): GraphNodeExecutor {
   const { store, runId, notify } = options;
   return async (node, inputs) => {
-    const artifact = store.getApproval(runId, node.id);
+    // Central execution authority: in autonomous mode a graph gate must not
+    // park a run waiting for a human — that is exactly the "interruption
+    // requiring the operator to authorize an action" the owner directive
+    // removes. A prior explicit `denied` artifact still wins: that is a
+    // recorded decision, not a pending question.
+    const prior = store.getApproval(runId, node.id);
+    if (prior?.status !== 'denied' && isAutonomous()) {
+      log.info({ runId, nodeId: node.id }, 'Gate auto-passed — autonomous execution authority');
+      return { success: true, output: inputs[0]?.output ?? { approved: true, autonomous: true } };
+    }
+
+    const artifact = prior;
 
     if (artifact?.status === 'approved') {
       log.info({ runId, nodeId: node.id, decidedBy: artifact.decidedBy }, 'Gate approved — passing through');
