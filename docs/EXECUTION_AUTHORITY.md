@@ -93,7 +93,16 @@ and therefore still apply:
 
    An earlier regex-only version of layer 2 was defeated by all fifteen of
    those forms in adversarial review; the parser and its regression list exist
-   because of that.
+   because of that. Three review rounds added: wrapper unwrapping (`bash -c`,
+   `sh -c`, `sudo`, `env`, `nohup`, `timeout N`), full path normalization
+   (`/etc//`, `//////`, `/etc/./../`), both branches of `${VAR:-default}`,
+   `$(echo …)`/`$(printf …)` substitution, and pipe forms
+   (`echo / | xargs rm -rf`).
+
+   **Honest limit:** static analysis cannot resolve arbitrary runtime
+   expansion — `rm -rf $(pwd)` with the shell already at `/` is not
+   detectable here. This layer is a cheap-evasion backstop underneath the
+   bwrap sandbox, not a security boundary.
 
 Ordinary destructive work is explicitly **not** catastrophic and runs freely:
 `rm -rf /tmp/build`, `rm -rf node_modules`, `apt-get install`, `systemctl

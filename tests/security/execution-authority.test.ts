@@ -175,6 +175,28 @@ describe('execution authority — containment is not a prompt', () => {
     }
   });
 
+  it('refuses slash/prefix/expansion evasions (review round 3)', () => {
+    for (const cmd of [
+      'rm -rf /etc//',                 // trailing double slash
+      'rm -rf //////',                 // run of slashes
+      'rm -rf /.//',
+      'rm -rf /etc/./../',
+      'chmod -R 000 //////',
+      'mv ////// /tmp',
+      'env bash -c "rm -rf /"',        // env wrapper was not stripped
+      'sudo env nohup rm -rf /',
+      'timeout 5 rm -rf /',
+      'rm -rf ${HOME:-/}',             // brace default expanded either way
+      'rm -rf ${FOO:=/}',
+      'rm -rf $(printf /)',
+      'echo / | xargs rm -rf',         // operand arrives over a pipe
+    ]) {
+      const d = authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd });
+      expect(d.proceed, `must refuse: ${cmd}`).toBe(false);
+      expect(d.requiresPrompt, `must not prompt: ${cmd}`).toBe(false);
+    }
+  });
+
   it('does NOT over-block legitimate work (over-blocking breaks the directive)', () => {
     for (const cmd of [
       'mkfs.ext4 /tmp/loop.img',        // loopback image — refused by the old bare `mkfs.` ban
@@ -188,6 +210,14 @@ describe('execution authority — containment is not a prompt', () => {
       'docker system prune -af',
       'git clean -xfd',
       'npm ci',
+      'rm -rf ${TMPDIR:-/tmp}/build',
+      'rm -rf /var/www//cache',
+      'env NODE_ENV=production npm run build',
+      'timeout 30 npm test',
+      'echo /tmp/old | xargs rm -rf',
+      'find /opt/app -name "*.log" | xargs rm -f',
+      'rsync -a --delete src/ /var/www/',
+      'tar -xzf app.tgz -C /opt/app',
     ]) {
       const d = authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd });
       expect(d.proceed, `must run: ${cmd}`).toBe(true);

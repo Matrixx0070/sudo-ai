@@ -152,15 +152,15 @@ export function authorize(req: AuthorityRequest): AuthorityDecision {
   // keeps its power in autonomous mode. An adversarial review found that
   // short-circuiting before it silently replaced ~20 audited entries with the
   // handful of patterns below — a capability regression, not a simplification.
-  // Both containment layers analyse the SAME normalised string, or a wrapper
-  // like `bash -c "..."` / `${HOME}` would hide intent from one of them.
-  const normalisedCommand =
-    req.command !== undefined ? normalizeForAnalysis(req.command) : undefined;
-  const dangerous =
-    normalisedCommand !== undefined &&
-    isDangerousCommand(req.action, { command: normalisedCommand });
+  // Both containment layers analyse the SAME normalised strings, or a wrapper
+  // like `bash -c "..."` / `${HOME}` hides intent from one of them. Every
+  // expansion variant is checked, so `${HOME:-/}` is refused either way.
+  const variants = req.command !== undefined ? analysisVariants(req.command) : [];
+  const refused =
+    variants.some((v) => isDangerousCommand(req.action, { command: v })) ||
+    variants.some((v) => isCatastrophicCommand(v));
 
-  if (req.command && (dangerous || isCatastrophicCommand(req.command)) && !catastrophicRefusalLifted()) {
+  if (req.command && refused && !catastrophicRefusalLifted()) {
     log.error(
       { surface: req.surface, action: req.action, command: req.command.slice(0, 200) },
       'authority: catastrophic command REFUSED (containment, not a prompt) — ' +
@@ -215,7 +215,7 @@ function unquote(token: string): string {
 
 /** Split a compound command on shell separators into individual commands. */
 function splitSegments(command: string): string[] {
-  return command.split(/(?:&&|\|\||[;\n])/).map((s) => s.trim()).filter(Boolean);
+  return command.split(/(?:&&|\|\||[;\n|])/).map((s) => s.trim()).filter(Boolean);
 }
 
 /** True when an `rm` invocation is both recursive and forced, any flag form. */
@@ -245,12 +245,12 @@ function operandsOf(tokens: string[]): string[] {
 
 /** Normalise a path operand for protected-root comparison. */
 function normalisePath(p: string): string {
-  if (p === '/' || p === '//') return '/';
-  // `/etc/../` resolves to `/` — a protected root reached by traversal.
-  const resolved = p.includes('..') ? resolveDots(p) : p;
-  if (resolved === '/') return '/';
-  // Collapse a trailing slash so `/etc/` compares equal to `/etc`.
-  return resolved.length > 1 && resolved.endsWith('/') ? resolved.slice(0, -1) : resolved;
+  // Always fully normalise: runs of slashes (`//////`), `.` segments and
+  // trailing slashes (`/etc//`) all previously defeated the protected-root
+  // comparison (adversarial review round 3).
+  if (!p.startsWith('/')) return p;
+  const resolved = resolveDots(p);
+  return resolved === '' ? '/' : resolved;
 }
 
 /**
@@ -266,8 +266,14 @@ function normalisePath(p: string): string {
 export function normalizeForAnalysis(command: string): string {
   let out = command.trim();
 
-  // `sudo`/`doas`/`env` prefixes add nothing to the analysis.
-  out = out.replace(/^(sudo|doas)\s+(-[A-Za-z]+\s+)*/, '');
+  // Neutral prefixes add nothing to the analysis. Applied repeatedly so
+  // `sudo env nohup rm -rf /` collapses all the way down.
+  for (let i = 0; i < 4; i++) {
+    const before = out;
+    out = out.replace(/^(sudo|doas|env|nohup|stdbuf|command|ionice|nice)\s+(-{1,2}[A-Za-z][\w-]*(=\S+)?\s+)*/, '');
+    out = out.replace(/^timeout\s+(-{1,2}\S+\s+)*[\d.]+[smhd]?\s+/, '');
+    if (out === before) break;
+  }
 
   // Unwrap `bash -c "..."` / `sh -c '...'` (two levels is plenty).
   for (let i = 0; i < 2; i++) {
@@ -279,10 +285,27 @@ export function normalizeForAnalysis(command: string): string {
   // `${VAR}` → `$VAR` so the audited `$HOME` ban applies to both spellings.
   out = out.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, '$$$1');
 
-  // Resolve trivially-static substitutions: `$(echo X)` / `` `echo X` ``.
+  // Resolve trivially-static substitutions: `$(echo X)`, `` `echo X` ``,
+  // `$(printf X)`, `$(printf '%s' X)`.
   out = out.replace(/\$\(\s*echo\s+([^)]*)\)/g, '$1');
   out = out.replace(/`\s*echo\s+([^`]*)`/g, '$1');
+  out = out.replace(/\$\(\s*printf\s+(?:'%s'|"%s"|%s)?\s*([^)]*)\)/g, '$1');
+  out = out.replace(/`\s*printf\s+(?:'%s'|"%s"|%s)?\s*([^`]*)`/g, '$1');
 
+  return out.trim();
+}
+
+/**
+ * A `${VAR:-default}` can expand to either branch and static analysis cannot
+ * know which. Return BOTH readings so a catastrophic one is never missed:
+ * `rm -rf ${HOME:-/}` must be refused whether HOME is set or not.
+ */
+export function analysisVariants(command: string): string[] {
+  const BRACE_DEFAULT = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?[-=+])([^}]*)\}/g;
+  const asVar = command.replace(BRACE_DEFAULT, '$$$1');
+  const asDefault = command.replace(BRACE_DEFAULT, '$2');
+  const out = [normalizeForAnalysis(asVar)];
+  if (asDefault !== asVar) out.push(normalizeForAnalysis(asDefault));
   return out;
 }
 
@@ -310,10 +333,29 @@ export function isCatastrophicCommand(command: string): boolean {
 
   const normalised = normalizeForAnalysis(command);
 
-  for (const segment of splitSegments(normalised)) {
-    const tokens = segment.split(/\s+/).filter(Boolean);
+  const segments = splitSegments(normalised);
+  for (let i = 0; i < segments.length; i++) {
+    let segment = segments[i] ?? '';
+    let tokens = segment.split(/\s+/).filter(Boolean);
     if (tokens.length === 0) continue;
-    const head = unquote(tokens[0] ?? '');
+    let head = unquote(tokens[0] ?? '');
+
+    // `echo / | xargs rm -rf` — the destructive operand arrives over the pipe.
+    // Rebuild the effective command from the producing segment.
+    if (head === 'xargs') {
+      // Drop only xargs' OWN leading flags (-n1, -0, -I{}); everything from
+      // the command name onward keeps its flags — `rm -rf` must stay `rm -rf`.
+      const rest = tokens.slice(1);
+      let k = 0;
+      while (k < rest.length && /^-/.test(unquote(rest[k] ?? ''))) k++;
+      const inner = rest.slice(k);
+      const prevTokens = (segments[i - 1] ?? '').split(/\s+/).filter(Boolean);
+      const piped = unquote(prevTokens[0] ?? '') === 'echo' ? prevTokens.slice(1) : [];
+      tokens = [...inner, ...piped];
+      segment = tokens.join(' ');
+      head = unquote(tokens[0] ?? '');
+      if (tokens.length === 0) continue;
+    }
 
     // Raw-device writes: dd of=/dev/sda, > /dev/nvme0n1, mkfs, wipefs, shred.
     if (BLOCK_DEVICE.test(segment)) {
