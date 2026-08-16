@@ -105,6 +105,34 @@ admitted users are explicitly excluded from owner status.
 A god-mode pass logs at `warn` with the surface, action and command, so
 unlimited authority is always *recorded*, even though it is never *questioned*.
 
+### God mode bypasses the sandbox too — that is the point
+
+Lifting the approval layer alone was **not** god-level access. Measured live
+(2026-08-16): with god mode on, an owner command `touch /etc/sudo-ai-godmode-proof`
+returned success and the agent reported "full root access confirmed", but the
+file did not exist on the host — `system.exec` had run it inside the bwrap
+mount namespace. The owner had authority over a copy of the system, not the
+system.
+
+So under god mode a **verified-owner** turn bypasses the sandbox and executes
+on the real host. Every other caller keeps it:
+
+| caller | sandbox |
+|---|---|
+| verified owner, god mode on | **bypassed — real host** |
+| verified owner, god mode off | sandbox (opt-in, not the default) |
+| non-owner / unattributed | sandbox, always |
+
+Each bypass logs at `warn`: `GOD MODE: owner-verified command bypassing the
+sandbox — executing on the real host`.
+
+### Contained runs must say they are contained
+
+The same incident exposed a reporting defect: a sandboxed write was described
+as "Done — file written". Sandboxed results now carry an explicit note that
+changes outside the session workspace did not affect the host, so a contained
+effect can never be reported as a host effect.
+
 `SUDO_AUTHORITY_ALLOW_CATASTROPHIC=1` remains the unconditional lift for
 headless contexts the owner explicitly trusts (no attribution required).
 
