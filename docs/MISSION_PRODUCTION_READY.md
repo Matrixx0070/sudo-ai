@@ -175,3 +175,44 @@ need the review that failed to run.
 1. Review #1106, #1107, #1114 (never reviewed) and #1110's post-fix commit.
 2. Rework #1109 (concurrency guard) and #1108 (never reworked).
 3. Then merge in dependency order, CI green, one at a time.
+
+---
+
+## WAVE 5 — merge decision (2026-08-16)
+
+21 agents, all completed. **#1113 MERGED** (ADR 0012, docs-only, 3 lenses). Everything else held.
+
+### CONFIRMED DEFECTS — proven by execution, not by reading
+
+| PR | defect |
+|---|---|
+| **#1109** | **LIVE COMMAND INJECTION as root.** `removeWorktree` does `execAsync(\`git worktree remove "${dir}" --force\`)` where `dir` comes from `fs.readdir(baseDir)` filtered only by `startsWith('sudo-autofix-')`. Double quotes do not stop `$( )`. A reviewer ran the real exported `pruneAutoFixWorktrees()` against a planted dir named `sudo-autofix-x$(touch PWNED)` → `COMMAND INJECTION EXECUTED = true`. **NOT on main — git-worktree.ts exists only on this branch.** |
+| **#1109** | Lane lock is not mutually exclusive: `mkdir` is atomic but the ownership record is check-then-act. Measured: "B acquired lane while A believes it holds it: true", plus a permanently leaked lock. Also wedges forever if a recycled pid matches a stale owner. Also: worktree branches from the shared checkout's HEAD, so it would carry a human's WIP commits once the flow actually commits. |
+| **#1108** | Owner-only bypass **not closed**: `personal!` — one appended character — launches a non-owner on the owner's real cookie jar. Two lenses REJECT. Worse than main: converts a loud abort into silent destruction of a saved login. |
+| **#1107** | The TUI guard asserts on the **wrong constant** (state root, not credential root) — fails in both directions, confirmed by execution. 3–4 credential stores unmigrated, so setting the new knob strands eval seeding. |
+| **#1106** | `revertAgentChanges()` swallows every non-zero exit and never checks its post-condition. Reproduced: with `.git/index.lock` held, reset+checkout both exit 128, are swallowed, and the tick reports `protected-path-reverted` with the agent's edit still staged. |
+| **#1112** | Branched off the **pre-rework** head of #1109 and rewrites the same file without the lane lock → merging both conflicts or silently reverts #1109. Transitively blocked. |
+
+### MERGE ORDER (remaining)
+1. ~~#1113 ADR 0012~~ — **MERGED**
+2. **#1114** scaffolding sweep — ⚠️ **OWNER DECISION REQUIRED, see below**
+3. **#1111** gitignore — fix first: its new test breaks `check:arch` on dev machines;
+   `docs/OPUS_HANDOFF_CAS_WIRING.md:222` still references the removed pattern.
+4. **#1110** dead TUI SDK path — fix first: `provider.ts:54` cites a test this branch itself
+   deleted; PR body reports 53 passed/4 files (actual 51/3). Better: export `loadDotEnv` and
+   pin it with a tmpdir fixture — after this PR provider.ts is types + one const, exactly the
+   shape a future dead-code sweep deletes, which would silently strip every API key from the
+   TUI process with no failing test.
+
+No conflicts among these four; merge sequentially, re-running `check:arch` after each
+(stacked branches have blown the max-lines ratchet before).
+
+### ⚠️ OWNER DECISION — #1114 is a publication question, not a code question
+**This repo is PUBLIC.** The scaffolding audit doc is a searchable index of which safety
+guards are advisory / fail-open / default-off, and it states in writing that sudo-ai
+disguises the owner-tier remote-command tool to defeat xAI's connector classifier. Every
+individual fact is already in public source; the doc *concentrates* them into one map.
+Also retitle its `DELETE NOW` verdicts to `CANDIDATE — OWNER GO REQUIRED` before an
+autonomous sweep reads them as license to delete.
+
+This is outward publishing of security-relevant material. Frank decides, not an agent.
