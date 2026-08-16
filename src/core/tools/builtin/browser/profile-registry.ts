@@ -32,6 +32,43 @@ export interface BrowserProfileEntry {
   ephemeral: boolean;
   /** Optional navigation allowlist (hostname suffixes). Empty = no extra restriction. */
   domainAllowlist: string[];
+  /**
+   * Set when this entry was DERIVED from another profile (a per-process fork
+   * dir `<base>__pid<N>`). The constraints above are the BASE profile's — a
+   * derived name must never be a cheaper way to reach a guarded profile.
+   */
+  derivedFrom?: string;
+}
+
+/**
+ * Marker separating a base profile from a per-process fork of it
+ * (`<base>__pid<N>`, see profile-lock.ts). It lives here, not in profile-lock,
+ * because it is a NAMING rule the registry must understand: `sanitizeProfileName`
+ * happily accepts `personal__pid1234`, so without base-name resolution a derived
+ * name would look unregistered and inherit the permissive default entry.
+ */
+export const FORK_MARKER = '__pid';
+
+const DERIVED_RE = new RegExp(`^(.+)${FORK_MARKER}(\\d+)$`);
+
+/** True for a per-process fork name such as `personal__pid1234`. */
+export function isDerivedProfileName(name: string): boolean {
+  return DERIVED_RE.test(String(name));
+}
+
+/**
+ * The logical profile a name belongs to: `personal__pid1234` → `personal`.
+ * Applied repeatedly so a doubly-derived name (`a__pid1__pid2`) still resolves
+ * to `a` rather than to the permissive default.
+ */
+export function baseProfileName(name: string): string {
+  let cur = String(name);
+  for (let i = 0; i < 8; i++) {
+    const m = DERIVED_RE.exec(cur);
+    if (!m) break;
+    cur = m[1]!;
+  }
+  return cur;
 }
 
 export interface BrowserProfilesConfig {
@@ -115,11 +152,23 @@ export function __resetProfileRegistryForTests(): void { _cache = null; }
  * Look up a profile entry. An unregistered name yields a conservative,
  * non-owner, persistent entry so arbitrary profile dirs still work — the
  * registry adds metadata, it does not restrict which dir names may exist.
+ *
+ * A DERIVED name (`<base>__pid<N>`) inherits the BASE profile's entry verbatim
+ * — ownerOnly, trust and domainAllowlist included. Without this, a per-process
+ * fork of `personal` (ownerOnly, trust high) would look unregistered and fall
+ * through to the permissive default, handing a non-owner a way in.
  */
 export function getProfileEntry(name: string): BrowserProfileEntry {
   const cfg = loadBrowserProfiles();
   const found = cfg.profiles[name];
   if (found) return found;
+  const base = baseProfileName(name);
+  if (base !== name) {
+    const parent = cfg.profiles[base];
+    // Inherit even from an UNREGISTERED base, so the recursion below is total.
+    const inherited = parent ?? getProfileEntry(base);
+    return { ...inherited, name, derivedFrom: base };
+  }
   return { name, trust: 'low', ownerOnly: false, ephemeral: false, domainAllowlist: [] };
 }
 

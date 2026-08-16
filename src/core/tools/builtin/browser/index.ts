@@ -54,9 +54,15 @@ import { networkTool } from './network.js';
 import { consoleTool } from './console-log.js';
 import { historyTool } from './history.js';
 import { registerComputerUseTools } from './computer-use-tool.js';
+import { withProfileIdentity } from './profile-identity.js';
 
-/** All browser tools in stable registration order. */
-export const BROWSER_TOOLS = [
+/**
+ * Raw definitions, before the profile-identity wrapper. Exported so a test can
+ * assert PROFILE_PARAM_BY_TOOL covers every one of them: a new browser tool
+ * must make an explicit decision about which parameter names its profile,
+ * instead of silently joining the set that hides a forked cookie jar.
+ */
+export const RAW_BROWSER_TOOLS = [
   browserManagerTool,
   navigateTool,
   interactTool,
@@ -84,6 +90,14 @@ export const BROWSER_TOOLS = [
   consoleTool,
   historyTool,
 ] as const;
+
+/**
+ * All browser tools in stable registration order, each wrapped so its result
+ * reports the profile it ACTUALLY ran on (see profile-identity.ts). Wrapping
+ * here rather than at registration means every consumer of this array gets the
+ * annotated definitions, not just the registry.
+ */
+export const BROWSER_TOOLS = RAW_BROWSER_TOOLS.map(withProfileIdentity);
 
 /**
  * Register all browser tools with the given registry.

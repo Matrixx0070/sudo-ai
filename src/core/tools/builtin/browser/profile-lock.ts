@@ -25,14 +25,15 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, read
 import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { createLogger } from '../../../shared/logger.js';
+// The fork naming rule is OWNED by the registry: it must resolve `<base>__pid<N>`
+// back to `<base>` so a derived name inherits every constraint (profile-registry.ts
+// getProfileEntry). Defining it twice is how those two drift apart.
+import { FORK_MARKER } from './profile-registry.js';
 
 const log = createLogger('browser:profile-lock');
 
 /** Files Chromium's ProcessSingleton creates in a userDataDir. */
 const SINGLETON_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'] as const;
-
-/** Marker separating a base profile dir from its per-process fork. */
-const FORK_MARKER = '__pid';
 
 export interface LockOwner {
   /** Host recorded in the lock (Chromium writes `<hostname>-<pid>`). */
@@ -148,12 +149,44 @@ export function sweepForkedProfiles(baseDir: string): string[] {
 }
 
 /**
+ * True when a launch failure is Chromium's ProcessSingleton abort. This is the
+ * AUTHORITATIVE signal that another process holds the userDataDir — the
+ * SingletonLock inspection is only advisory, because the file is written by
+ * Chromium some milliseconds after it decides to start.
+ */
+export function isProcessSingletonAbort(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /ProcessSingleton|SingletonLock: File exists/i.test(msg);
+}
+
+/** Thrown when the profile is held by a live process and forking is not allowed. */
+export class ProfileLockedError extends Error {
+  constructor(public readonly requestedDir: string, public readonly ownerPid: number | null) {
+    super(
+      `browser profile dir "${requestedDir}" is held by another live process` +
+        (ownerPid === null ? '' : ` (pid ${ownerPid})`) +
+        ' and forking is not permitted for this profile — close the other browser first',
+    );
+    this.name = 'ProfileLockedError';
+  }
+}
+
+/**
  * Decide which userDataDir to actually launch on, given the profile dir the
  * caller asked for. Reaps dead forks, clears a stale lock, and forks only when
  * a live process holds the profile. Logs loudly — a silently different profile
  * means silently different cookies.
+ *
+ * @param allowFork false REFUSES rather than forking a live-locked profile.
+ *        Callers pass false for owner-only profiles: a fork is a *new*
+ *        userDataDir with a *new* identity, and a second on-disk home for an
+ *        owner-only identity is a lateral surface with no upside (the fork has
+ *        a fresh cookie jar, so it cannot do the thing the profile exists for).
  */
-export function resolveLaunchProfileDir(requestedDir: string): { dir: string; forked: boolean } {
+export function resolveLaunchProfileDir(
+  requestedDir: string,
+  opts: { allowFork?: boolean } = {},
+): { dir: string; forked: boolean } {
   sweepForkedProfiles(requestedDir);
   const lock = inspectProfileLock(requestedDir);
   if (lock.state === 'stale-cleared') {
@@ -161,12 +194,52 @@ export function resolveLaunchProfileDir(requestedDir: string): { dir: string; fo
     return { dir: requestedDir, forked: false };
   }
   if (lock.state === 'free') return { dir: requestedDir, forked: false };
+  if (opts.allowFork === false) {
+    log.warn({ requestedDir, lockOwnerPid: lock.owner.pid }, 'Browser profile is locked by a live process and may not be forked — refusing');
+    throw new ProfileLockedError(requestedDir, lock.owner.pid);
+  }
   const dir = ensureForkedProfileDir(requestedDir);
   log.warn(
     { requestedDir, dir, lockOwnerPid: lock.owner.pid, pid: process.pid },
     "Browser profile is locked by another live process — using a PER-PROCESS FORK: fresh cookie jar, the requested profile's logins are NOT available here",
   );
   return { dir, forked: true };
+}
+
+/**
+ * Launch a persistent context on `requestedDir`, surviving a collision with
+ * another live process. `launch` is injected so this module stays free of any
+ * Playwright import.
+ *
+ * Two defences, because one is not enough:
+ *  1. {@link resolveLaunchProfileDir} inspects SingletonLock up front.
+ *  2. That inspection is ADVISORY — between reading the lock and Chromium
+ *     writing it there is a window in which a second process sees a free
+ *     profile. Measured: three vitest workers cold-started on the same profile,
+ *     all read "free", and one still died with the ProcessSingleton abort.
+ *     Chromium's own failure is authoritative, so retry once on the fork.
+ */
+export async function launchWithLockFallback<T>(
+  requestedDir: string,
+  allowFork: boolean,
+  launch: (dir: string) => Promise<T>,
+  logCtx: Record<string, unknown> = {},
+): Promise<{ value: T; dir: string; forked: boolean }> {
+  const first = resolveLaunchProfileDir(requestedDir, { allowFork });
+  log.info({ ...logCtx, requestedDir, userDataDir: first.dir, forked: first.forked }, 'Launching persistent browser profile');
+  try {
+    return { value: await launch(first.dir), dir: first.dir, forked: first.forked };
+  } catch (err) {
+    if (!isProcessSingletonAbort(err)) throw err;
+    if (!allowFork) throw new ProfileLockedError(requestedDir, null);
+    if (first.forked) throw err; // a fork of our own pid cannot be contended
+    const dir = ensureForkedProfileDir(requestedDir);
+    log.warn(
+      { ...logCtx, requestedDir, dir, pid: process.pid },
+      "Lost the ProcessSingleton race — retrying on a PER-PROCESS FORK: fresh cookie jar, the requested profile's logins are NOT available here",
+    );
+    return { value: await launch(dir), dir, forked: true };
+  }
 }
 
 /** Remove a single forked profile dir. No-op for a non-forked path. */

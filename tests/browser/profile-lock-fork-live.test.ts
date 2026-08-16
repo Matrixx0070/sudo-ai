@@ -1,36 +1,44 @@
 /**
  * @file profile-lock-fork-live.test.ts
- * @description A SECOND process must get a working browser instead of an
- * exception when the daemon already holds the profile dir. The lock is planted
- * with a real live pid (a spawned `sleep`), which is exactly what Chromium
- * writes, so this reproduces the daemon situation without needing the daemon.
+ * @description A SECOND process must get a working browser instead of a
+ * ProcessSingleton abort when another live process already holds the profile
+ * dir. The lock is planted with a real live pid (a spawned `sleep`), which is
+ * exactly what Chromium writes, so this reproduces the daemon situation
+ * without needing the daemon.
+ *
+ * ISOLATION: DATA_DIR is redirected to a fresh tmpdir BEFORE any module that
+ * reads it is imported, so nothing here can touch a real profile dir under
+ * data/browser-profiles (those hold live logins). Only the read-only
+ * config/browser-profiles.json5 comes from the repo.
  *
  * The browser part skips when Chromium is absent (CI installs no browsers);
- * the registry-constraint part is pure and always runs.
+ * the constraint-inheritance part is pure and always runs.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
-import { hostname } from 'node:os';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { browserAvailable } from './_browser-available.js';
-import { BrowserManager } from '../../src/core/tools/builtin/browser/browser-manager.js';
-import { ensureProfileDir } from '../../src/core/tools/builtin/browser/profile-registry.js';
-import { forkedProfileDir, inspectProfileLock } from '../../src/core/tools/builtin/browser/profile-lock.js';
+
+const DATA_ROOT = mkdtempSync(join(tmpdir(), 'fork-live-data-'));
+process.env['DATA_DIR'] = DATA_ROOT;
+
+// Imported AFTER DATA_DIR is set — paths.ts captures it at module load.
+const { BrowserManager } = await import('../../src/core/tools/builtin/browser/browser-manager.js');
+const { ensureProfileDir } = await import('../../src/core/tools/builtin/browser/profile-registry.js');
+const { forkedProfileDir, inspectProfileLock } = await import(
+  '../../src/core/tools/builtin/browser/profile-lock.js'
+);
 
 let holder: ChildProcess;
 
-/**
- * Plant a Chromium ProcessSingleton lock owned by the live `holder` process.
- * Refuses to stomp a REAL live lock — removing another process's lock would
- * let two Chromiums share a profile, which is the corruption this whole change
- * exists to avoid.
- */
+/** Plant a Chromium ProcessSingleton lock owned by the live `holder` process. */
 function plantLiveLock(profileName: string): string {
   const dir = ensureProfileDir(profileName);
   const state = inspectProfileLock(dir); // also clears a stale lock
   if (state.state === 'live') {
-    throw new Error(`profile "${profileName}" is genuinely in use (pid ${state.owner.pid}) — test needs an idle profile`);
+    throw new Error(`profile "${profileName}" is in use (pid ${state.owner.pid}) — test needs an idle profile`);
   }
   symlinkSync(`${hostname()}-${holder.pid}`, join(dir, 'SingletonLock'));
   return dir;
@@ -41,20 +49,35 @@ beforeAll(() => {
 });
 afterAll(() => {
   holder.kill('SIGKILL');
+  rmSync(DATA_ROOT, { recursive: true, force: true });
 });
 
 describe('a profile locked by another live process', () => {
-  it('still enforces the owner-only gate — the fork inherits the constraint', async () => {
+  it('refuses a cold open of an owner-only profile before any dir work', async () => {
+    await expect(
+      BrowserManager.getInstance().launch('personal', true, false, false),
+    ).rejects.toThrow(/owner-only/);
+  });
+
+  it('REFUSES to fork an owner-only profile even on the gated path', async () => {
     const dir = plantLiveLock('personal'); // registry: ownerOnly, trust high
     try {
+      // allowOwnerOnly=true → past the identity gate, and still refused: a fork
+      // would be a second on-disk home for a guarded identity, with a fresh
+      // cookie jar that cannot do what the profile exists for.
       await expect(
-        BrowserManager.getInstance().launch('personal', true, false, false),
-      ).rejects.toThrow(/owner-only/);
-      // Refused before any launch → no fork dir was created either.
+        BrowserManager.getInstance().launch('personal', true, false, true),
+      ).rejects.toThrow(/held by another live process/);
       expect(existsSync(forkedProfileDir(dir))).toBe(false);
     } finally {
       rmSync(join(dir, 'SingletonLock'), { force: true });
     }
+  });
+
+  it('refuses a fork DIR name supplied directly by a caller', async () => {
+    await expect(
+      BrowserManager.getInstance().launch(`personal__pid${process.pid}`, true, false, true),
+    ).rejects.toThrow(/per-process fork/);
   });
 });
 

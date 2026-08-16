@@ -28,11 +28,13 @@ import { SSRFGuard } from './ssrf-guard.js';
 import {
   getProfileEntry,
   ensureProfileDir,
+  isDerivedProfileName,
+  baseProfileName,
   profileDir as resolveProfileDir,
   type ProfileTrust,
 } from './profile-registry.js';
 import { checkOwnerAllowed, browserAudit } from './safety.js';
-import { resolveLaunchProfileDir, removeForkedProfile } from './profile-lock.js';
+import { launchWithLockFallback, removeForkedProfile } from './profile-lock.js';
 
 const log = createLogger('browser-manager');
 
@@ -278,6 +280,19 @@ export class BrowserManager {
       );
     }
 
+    // A per-process fork dir (`<base>__pid<N>`) is an INTERNAL artifact, never a
+    // profile a caller may name — `sanitizeProfileName` accepts it verbatim, so
+    // without this a caller could address the fork of a guarded profile directly.
+    // getProfileEntry makes such a name inherit the base constraints anyway; this
+    // outer layer refuses it outright rather than merely re-gating it.
+    if (isDerivedProfileName(name)) {
+      browserAudit('derived-profile-name-refused', { profile: name, base: baseProfileName(name) });
+      throw new Error(
+        `browser profile "${name}" names a per-process fork of "${baseProfileName(name)}" — ` +
+        'forks are internal and cannot be opened directly; use the base profile name',
+      );
+    }
+
     const entry = getProfileEntry(name);
     // Owner-only chokepoint: refuse a cold open unless it came through a gated
     // tool. Closes the bypass where any getOrConnect-based tool could open a
@@ -293,14 +308,9 @@ export class BrowserManager {
     }
     const requestedDir = ensureProfileDir(name, this.profilesRoot); // 0700
 
-    // Cross-PROCESS collision: Chromium's ProcessSingleton aborts the launch
-    // when another LIVE process holds this userDataDir (the daemon holds
-    // "default", so the TUI / bench / sandbox / tests all died here). Fork to a
-    // per-process sibling instead of aborting. A STALE lock (owner gone) is
-    // cleared and the real profile reused — never forked around.
-    const { dir: userDataDir, forked } = resolveLaunchProfileDir(requestedDir);
-
-    log.info({ name, userDataDir, forked, headless, ephemeral: entry.ephemeral, trust: entry.trust }, 'Launching persistent browser profile');
+    // Cross-PROCESS collision handling (fork on a live lock, clear a stale one,
+    // never fork an owner-only profile) lives in profile-lock.ts.
+    const allowFork = !entry.ownerOnly;
 
     // Detect Chromium version once for UA/CH-header accuracy
     const chromiumVersion = await getCachedChromiumVersion();
@@ -318,7 +328,7 @@ export class BrowserManager {
 
     // Persistent context: userDataDir is the profile. Launch + context options
     // are merged here (Playwright API). This is what makes logins durable.
-    const context = await chromium.launchPersistentContext(userDataDir, {
+    const launchOptions = {
       headless,
       executablePath,
       args: buildLaunchArgs(),
@@ -326,7 +336,13 @@ export class BrowserManager {
       extraHTTPHeaders: buildClientHintsHeaders(chromiumVersion),
       viewport: { width: 1280, height: 800 },
       ignoreHTTPSErrors: true,
-    });
+    };
+    const { value: context, dir: userDataDir, forked } = await launchWithLockFallback(
+      requestedDir,
+      allowFork,
+      (dir) => chromium.launchPersistentContext(dir, launchOptions),
+      { name, headless, ephemeral: entry.ephemeral, trust: entry.trust },
+    );
 
     log.info(
       { name, executablePath: executablePath ?? 'playwright-bundled', headless, display: process.env['DISPLAY'] ?? null },
@@ -650,12 +666,12 @@ export const browserManagerTool: ToolDefinition = {
         // Report the mode the instance is ACTUALLY in, never the requested one —
         // an echoed request parameter is not evidence the window exists.
         const actualHeadless = instance.cdp ? headless : (instance.headless ?? headless);
-        const modeNote = (actualHeadless === headless
+        // The fork warning is NOT written here: profile-identity.ts appends it to
+        // every browser tool's result, this one included, so there is one wording
+        // and no entry point can miss it.
+        const modeNote = actualHeadless === headless
           ? ''
-          : ` (NOTE: requested headless=${headless} but instance is headless=${actualHeadless})`)
-          + (instance.forked
-            ? ' (NOTE: profile was locked by another live process — running on a per-process FORK with a fresh cookie jar; existing logins are NOT available)'
-            : '');
+          : ` (NOTE: requested headless=${headless} but instance is headless=${actualHeadless})`;
         return {
           success: true,
           output:
