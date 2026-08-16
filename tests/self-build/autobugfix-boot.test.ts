@@ -4,7 +4,14 @@
  * dormant-by-default contract and the opt-in gate; module behavior itself is
  * covered by auto-fix-trigger / deployment-hook suites.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+// Fail-closed guard: nothing in this file may reach the real gh CLI or git
+// (the unmocked escape poisoned full-suite runs on 2026-08-16).
+vi.mock('child_process', () => ({
+  exec: (_cmd: string, cb: (e: Error | null) => void) =>
+    cb(new Error('gh: command not found (mocked test env)')),
+}));
+
 import { startAutoBugFix } from '../../src/core/self-build/autobugfix-boot.js';
 
 describe('startAutoBugFix (F90)', () => {

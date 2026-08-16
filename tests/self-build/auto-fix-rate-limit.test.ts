@@ -8,7 +8,14 @@
  * is what AL8.5 demands be test-pinned.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+// Fail-closed guard: nothing in this file may reach the real gh CLI or git
+// (the unmocked escape poisoned full-suite runs on 2026-08-16).
+vi.mock('child_process', () => ({
+  exec: (_cmd: string, cb: (e: Error | null) => void) =>
+    cb(new Error('gh: command not found (mocked test env)')),
+}));
+
 import { AutoFixTrigger } from '../../src/core/self-build/auto-fix-trigger.js';
 
 type PrivateLimiter = { _canProceedThisHour(): boolean };

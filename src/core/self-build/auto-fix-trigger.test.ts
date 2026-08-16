@@ -202,7 +202,7 @@ describe('AutoFixTrigger', () => {
       expect(result).toEqual({ success: false, reason: 'fetch-failed' });
       // The exec boundary saw only the gh fetch — never git.
       expect(execCalls.some((c) => c.includes('gh issue view 123'))).toBe(true);
-      expect(execCalls.some((c) => c.includes('git '))).toBe(false);
+      expect(execCalls.some((c) => /(^|[\s;&|])git[\s-]/.test(c))).toBe(false);
     });
 
     it('never reaches the real exec boundary — full happy path stays mocked (regression: live checkout switch)', async () => {
@@ -235,7 +235,7 @@ describe('AutoFixTrigger', () => {
         const trigger = new AutoFixTrigger(deps);
         await trigger.processIssue(123);
         // The dangerous commands ran — but only against the mock.
-        expect(execCalls.some((c) => c.includes('checkout'))).toBe(true);
+        expect(execCalls.some((c) => c.includes('git checkout -b'))).toBe(true);
       }
     });
   });
