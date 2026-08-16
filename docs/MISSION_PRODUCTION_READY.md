@@ -296,3 +296,31 @@ strengthen the assertion. Belt-and-braces: vitest setup could set
 
 Interim rule: do not run the suite in the live checkout or any checkout you care about
 until this test is fixed (worktree + neutered `gh` is safe).
+
+## XCLAW-LEVEL — executable definition of "done" (2026-08-16, Frank's directive)
+
+Frank: sudo-ai must reach or exceed xclaw's demonstrated level. "Level" here is not
+feature count — sudo-ai has more machinery — it is **demonstrated working product**.
+Every criterion below is a command or observable proof, re-runnable per release.
+
+| # | criterion | proof command / observable | status 2026-08-16 |
+|---|---|---|---|
+| X1 | Telegram E2E: owner DM → correct reply | CDP :9223 drive web.telegram.org → @Sudoaii_bot replies | ✅ proven 2× today (18:24, 18:25) |
+| X2 | Health: 0 criticals sustained, owner-visible | watchdog log + criticals DM'd to owner | ✅ today ("zero criticals"); keep at 0 |
+| X3 | Suite green in isolated worktree, no test touches real gh/git/network | full vitest in worktree + reflog unchanged after | ✅ 13,171 tests; guard PR #1115 in flight |
+| X4 | CI green on main, releases + CHANGELOG current per merge | gh run list; releases page | CI ✅; release hygiene UNVERIFIED |
+| X5 | Every configured LLM provider proven by one live call, matrix recorded | per-provider probe script output | UNVERIFIED |
+| X6 | Approval tiering: read-only auto-runs, risky pends to owner, live-proven | send risky + read-only op via Telegram, observe | UNVERIFIED |
+| X7 | Cost governance: per-run + daily spend visible to owner, caps alert | spend report / DM on band change | UNVERIFIED (xclaw parity) |
+| X8 | Long-run objectives survive restart/context loss, resume from state | kill daemon mid-mission → resumes, criteria intact | partial (mission wake exists) — UNVERIFIED |
+| X9 | Dependencies: 69 → ≤40 (milestone 1), each survivor justified | package.json count + zero-import audit | 69; 5 @ai-sdk/* known dead |
+| X10 | Daemon exits: only intentional (SIGINT-clean); SIGKILL class explained | pm2 log exit histogram | 93 clean / 3 SIGKILL / 3 code-1 (lifetime) |
+| X11 | No unreviewed merge, ever (standing rule restated) | PR review trail | orchestration RESTORED today — lenses run again |
+
+Method (unchanged): one slice at a time, live-proven same day through the real
+Telegram flow, adversarial review before merge. xclaw itself may be used as a dev
+tool for bounded verification jobs.
+
+Restart-cause histogram measured 2026-08-16: 99 exits lifetime = 93 SIGINT/code-0
+(intentional deploys), 3 SIGKILL (watch: possible shutdown hangs), 3 SIGINT/code-1.
+No crash loop. The "32 restarts" pm2 counter is operational history, not instability.
