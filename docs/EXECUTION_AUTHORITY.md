@@ -144,9 +144,17 @@ machine. Consequences:
 
 - **Owner attribution must be exact.** Web chat previously marked EVERY turn
   `isOwner: true` while skipping auth on loopback/LAN — behind a reverse proxy
-  that made any caller the owner. Now web chat confers owner status only when
-  the request proves `WEB_CHAT_TOKEN`; loopback/LAN admission still works, but
-  admission is not ownership.
+  that made any caller the owner. Now **admission and ownership are separate
+  questions**: loopback/LAN still admits, but owner status requires proving
+  `WEB_CHAT_TOKEN`.
+
+  The proof is bound **per connection and per request**, never cached on the
+  adapter. A first attempt did cache it, and review reproduced a tokenless
+  WebSocket inheriting owner status from the owner's previous HTTP request —
+  real-host root for an unauthenticated client. `tests/channels/web-owner-attribution.test.ts`
+  drives a real server and a real socket to pin every path (POST, WS,
+  attachments), because the earlier test pre-set the internal flag and passed
+  while both holes were open.
 - **Keep god mode off where owner attribution is weak** — any proxied or
   non-loopback deployment without a real owner-id match.
 - `agent.command` driven by external Grok text (`SUDO_GROK_WEB_MCP_COMMAND=1`,

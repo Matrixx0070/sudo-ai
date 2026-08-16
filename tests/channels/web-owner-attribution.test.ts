@@ -3,60 +3,129 @@
  * @description Web chat may ADMIT a loopback/LAN client without a token, but
  * it must never call that client the OWNER.
  *
- * Found by adversarial review (2026-08-16, CONCERN 1): every web turn was
- * dispatched with `isOwner: true` while the adapter skips auth for
- * 127.0.0.1, ::1, and private LAN ranges. Behind a reverse proxy every remote client
- * appears as 127.0.0.1 — so any caller was "the owner". Harmless while
- * everything was sandboxed; under god mode an owner-attributed web turn
- * executes on the REAL HOST.
+ * Two adversarial-review findings drive this file (2026-08-16):
+ *   1. cli.ts dispatched EVERY web turn as `isOwner: true` while the adapter
+ *      skips auth on loopback/LAN — behind a reverse proxy every client looks
+ *      like 127.0.0.1, so any caller was "the owner".
+ *   2. The first fix cached the proof on the ADAPTER, so a tokenless
+ *      WebSocket (admitted by the same bypass) inherited owner status from
+ *      the last owner HTTP request — reproduced as real-host root under god
+ *      mode. Owner-proof must be per-connection and per-request.
+ *
+ * These tests drive a REAL server over a REAL socket, because the earlier
+ * version of this file pre-set the internal flag and passed while both holes
+ * were open.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import http from 'node:http';
+import { WebSocket } from 'ws';
 import { WebAdapter } from '../../src/core/channels/web.js';
 import type { UnifiedMessage } from '../../src/core/channels/types.js';
 
 const TOKEN = 'owner-token-under-test';
-let saved: string | undefined;
+let saved: Record<string, string | undefined> = {};
+let adapter: WebAdapter;
+let server: http.Server;
+let port: number;
+let seen: UnifiedMessage[];
 
-beforeEach(() => {
-  saved = process.env['WEB_CHAT_TOKEN'];
+beforeEach(async () => {
+  saved = {
+    WEB_CHAT_TOKEN: process.env['WEB_CHAT_TOKEN'],
+    WEB_CHAT_ENABLED: process.env['WEB_CHAT_ENABLED'],
+    WEB_CHAT_PORT: process.env['WEB_CHAT_PORT'],
+  };
   process.env['WEB_CHAT_TOKEN'] = TOKEN;
-});
-
-afterEach(() => {
-  if (saved === undefined) delete process.env['WEB_CHAT_TOKEN'];
-  else process.env['WEB_CHAT_TOKEN'] = saved;
-});
-
-/** Drive the adapter's private dispatch with a chosen proven-ness. */
-async function dispatchWith(ownerProven: boolean): Promise<UnifiedMessage> {
-  const adapter = new WebAdapter();
-  const seen: UnifiedMessage[] = [];
+  process.env['WEB_CHAT_ENABLED'] = 'true';
+  seen = [];
+  adapter = new WebAdapter();
   adapter.onMessage(async (m) => { seen.push(m); });
-  (adapter as unknown as { _lastRequestOwnerProven: boolean })._lastRequestOwnerProven = ownerProven;
-  await (adapter as unknown as {
-    _dispatch(peerId: string, text: string): Promise<void>;
-  })._dispatch('peer-1', 'hello');
-  const msg = seen[0];
-  if (!msg) throw new Error('adapter dispatched no message');
-  return msg;
+
+  // The adapter attaches to an already-bound gateway server (it never listens
+  // itself), so the test owns the server exactly like the gateway does.
+  server = http.createServer();
+  adapter.attach(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  port = (server.address() as { port: number }).port;
+  process.env['WEB_CHAT_PORT'] = String(port);
+});
+
+afterEach(async () => {
+  await adapter.stop?.();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  for (const [k, v] of Object.entries(saved)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
+
+/** Wait until a message arrives (or fail the test on timeout). */
+async function nextMessage(timeoutMs = 4000): Promise<UnifiedMessage> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const msg = seen.shift();
+    if (msg) return msg;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error('no inbound message observed');
+}
+
+async function post(path: string, body: unknown): Promise<void> {
+  await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+async function wsSend(query: string, text: string): Promise<void> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/chat/ws${query}`);
+  await new Promise<void>((resolve, reject) => {
+    ws.once('open', () => resolve());
+    ws.once('error', reject);
+  });
+  ws.send(text);
+  await new Promise((r) => setTimeout(r, 150));
+  ws.close();
 }
 
 describe('web chat owner attribution', () => {
-  it('is NOT owner when the token was never proven (loopback/LAN admission)', async () => {
-    const msg = await dispatchWith(false);
-    expect(msg.isOwner).toBe(false);
+  it('POST without the token is admitted on loopback but is NOT owner', async () => {
+    await post('/api/message', { peerId: 'attacker', text: 'hello' });
+    expect((await nextMessage()).isOwner).toBe(false);
   });
 
-  it('IS owner when the request proved WEB_CHAT_TOKEN', async () => {
-    const msg = await dispatchWith(true);
-    expect(msg.isOwner).toBe(true);
+  it('POST proving the token IS owner', async () => {
+    await fetch(`http://127.0.0.1:${port}/api/message?token=${TOKEN}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peerId: 'owner', text: 'hello' }),
+    });
+    expect((await nextMessage()).isOwner).toBe(true);
   });
 
-  it('never reports owner as undefined (god mode requires an explicit answer)', async () => {
-    // `ownerVerified === true` is the god-mode condition; an undefined here
-    // would read as "not owner" today but is too easy to misread later.
-    const msg = await dispatchWith(false);
-    expect(typeof msg.isOwner).toBe('boolean');
+  it('a tokenless WS does NOT inherit owner from a prior owner request', async () => {
+    // The reproduced exploit: owner proves the token over HTTP…
+    await fetch(`http://127.0.0.1:${port}/api/message?token=${TOKEN}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peerId: 'owner', text: 'owner turn' }),
+    });
+    expect((await nextMessage()).isOwner).toBe(true);
+
+    // …then an unauthenticated socket connects and must NOT be the owner.
+    await wsSend('', 'attacker turn');
+    expect((await nextMessage()).isOwner).toBe(false);
+  });
+
+  it('a WS that proves the token IS owner', async () => {
+    await wsSend(`?token=${TOKEN}`, 'owner ws turn');
+    expect((await nextMessage()).isOwner).toBe(true);
+  });
+
+  it('owner status is boolean on every path (god mode requires an explicit answer)', async () => {
+    await post('/api/message', { peerId: 'p', text: 'x' });
+    expect(typeof (await nextMessage()).isOwner).toBe('boolean');
   });
 });

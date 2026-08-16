@@ -254,10 +254,23 @@ export class WebAdapter implements ChannelAdapter {
   }
 
   /**
-   * True when the most recent inbound HTTP request proved WEB_CHAT_TOKEN.
-   * Owner attribution only — never admission (see the auth block).
+   * Does THIS request prove WEB_CHAT_TOKEN? Owner attribution only — never
+   * admission. Deliberately per-request/per-connection: a previous version
+   * cached it on the adapter, so a tokenless WS admitted by the loopback
+   * bypass inherited owner status from the last owner HTTP request
+   * (adversarial review 2026-08-16 — reproduced as real-host root).
    */
-  private _lastRequestOwnerProven = false;
+  private static _provesOwner(req: http.IncomingMessage, rawUrl: string): boolean {
+    const required = resolveEnvSecret('WEB_CHAT_TOKEN') ?? '';
+    if (!required) return false;
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl, `http://${req.headers['host'] ?? 'localhost'}`);
+    } catch {
+      parsed = new URL('/', 'http://localhost');
+    }
+    return safeTokenEqual(extractToken(req, parsed), required);
+  }
 
   onMessage(handler: MessageHandler): void {
     this._handler = handler;
@@ -332,13 +345,14 @@ export class WebAdapter implements ChannelAdapter {
         const ip = (httpReq.socket as { remoteAddress?: string } | null)?.remoteAddress;
         // A file upload arrives as a JSON attachment envelope; everything else
         // is a plain-text message. Only frames starting with '{' are parse-probed.
+        const wsOwner = (ws as unknown as { __ownerProven?: boolean }).__ownerProven === true;
         if (raw.length > 0 && raw[0] === '{') {
           const env = parseAttachmentEnvelope(raw);
-          if (env) { void this._handleAttachment(peerId, env, ip); return; }
+          if (env) { void this._handleAttachment(peerId, env, ip, wsOwner); return; }
         }
         const text = raw.trim();
         if (!text) return;
-        void this._dispatch(peerId, text, ip);
+        void this._dispatch(peerId, text, ip, undefined, wsOwner);
       });
 
       ws.on('close', () => {
@@ -416,7 +430,12 @@ export class WebAdapter implements ChannelAdapter {
         }
       }
 
+      // Bind owner-proof to THIS connection at upgrade time. Admission may
+      // come from the loopback/LAN bypass; ownership never does.
+      const wsOwnerProven = WebAdapter._provesOwner(req, upgradeUrl);
+
       wss.handleUpgrade(req, socket as import('stream').Duplex, head as Buffer, (ws) => {
+        (ws as unknown as { __ownerProven?: boolean }).__ownerProven = wsOwnerProven;
         wss.emit('connection', ws, req);
       });
     });
@@ -557,17 +576,7 @@ export class WebAdapter implements ChannelAdapter {
     // owner status: a reverse proxy makes every remote client look like
     // 127.0.0.1, and under god mode an owner-attributed web turn executes on
     // the real host. Adversarial review 2026-08-16, CONCERN 1.
-    let tokenProven = false;
-    {
-      let parsed: URL;
-      try {
-        parsed = new URL(rawUrl, `http://${req.headers['host'] ?? 'localhost'}`);
-      } catch {
-        parsed = new URL('/', 'http://localhost');
-      }
-      tokenProven = requiredToken.length > 0 && safeTokenEqual(extractToken(req, parsed), requiredToken);
-    }
-    this._lastRequestOwnerProven = tokenProven;
+    const tokenProven = WebAdapter._provesOwner(req, rawUrl);
 
     if (requiredToken && !isLocalDev && !tokenProven) {
       res.writeHead(401, { 'Content-Type': 'text/plain' });
@@ -637,7 +646,7 @@ export class WebAdapter implements ChannelAdapter {
           }
           // Echo the injected user message to the browser so both sides are visible
           this._broadcast(data.peerId, JSON.stringify({ type: 'user_echo', text: data.text }));
-          void this._dispatch(data.peerId, data.text, (req.socket as { remoteAddress?: string } | null)?.remoteAddress)
+          void this._dispatch(data.peerId, data.text, (req.socket as { remoteAddress?: string } | null)?.remoteAddress, undefined, tokenProven)
             .then(() => {
               if (res.headersSent || res.writableEnded) return;
               res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -682,7 +691,12 @@ export class WebAdapter implements ChannelAdapter {
    * the saved path (with a vision hint for images) and carries `media` metadata —
    * mirroring the Telegram photo/document path so the agent treats it identically.
    */
-  private async _handleAttachment(peerId: string, env: AttachmentEnvelope, peerIp?: string): Promise<void> {
+  private async _handleAttachment(
+    peerId: string,
+    env: AttachmentEnvelope,
+    peerIp?: string,
+    ownerProven = false,
+  ): Promise<void> {
     let buf: Buffer;
     try {
       buf = Buffer.from(env.dataBase64, 'base64');
@@ -734,7 +748,7 @@ export class WebAdapter implements ChannelAdapter {
     }];
 
     log.info({ peerId, savedPath, bytes: buf.length, mime: env.mime }, 'Web attachment received');
-    void this._dispatch(peerId, textWithHint, peerIp, media);
+    void this._dispatch(peerId, textWithHint, peerIp, media, ownerProven);
   }
 
   /**
@@ -746,7 +760,13 @@ export class WebAdapter implements ChannelAdapter {
     void this._dispatch(peerId, text);
   }
 
-  private async _dispatch(peerId: string, text: string, peerIp?: string, media?: MediaAttachment[]): Promise<void> {
+  private async _dispatch(
+    peerId: string,
+    text: string,
+    peerIp?: string,
+    media?: MediaAttachment[],
+    ownerProven = false,
+  ): Promise<void> {
     if (!this._handler) {
       log.warn({ peerId }, 'No handler — Web message dropped');
       return;
@@ -760,9 +780,10 @@ export class WebAdapter implements ChannelAdapter {
       peerName: peerId,
       chatType: 'dm',
       text,
-      // Owner only when the request proved the token — a loopback/LAN
-      // admission bypass must not grant owner power (god mode reads this).
-      isOwner: this._lastRequestOwnerProven,
+      // Owner only when THIS request/connection proved the token — a
+      // loopback/LAN admission bypass must not grant owner power, and no
+      // other request's proof may leak in (god mode reads this).
+      isOwner: ownerProven,
       timestamp: new Date(),
       ...(media && media.length ? { media } : {}),
     };
