@@ -216,3 +216,42 @@ Also retitle its `DELETE NOW` verdicts to `CANDIDATE — OWNER GO REQUIRED` befo
 autonomous sweep reads them as license to delete.
 
 This is outward publishing of security-relevant material. Frank decides, not an agent.
+
+---
+
+## CORRECTION (2026-08-16) — the "every 30 minutes" hazard does not exist
+
+Measured directly, no agents:
+
+- `autobugfix-boot.ts:50` gates AutoFixTrigger on `SUDO_AUTOBUGFIX=1`. **Not set in the pm2
+  daemon env.** Dormant.
+- `SUDO_SELF_BUILD_MODE` likewise unset → `runSelfBuildTick` returns `disabled`.
+- Auto-fix checkouts in the reflog: May 31(1), Jun 14(2), Jun 15(2), Jul 02(2), Jul 13(3),
+  Jul 14(4), Aug 06(2). **Zero in the last 10 days.** The Aug 6 switch targeted a branch
+  last committed 2026-07-14 — a one-off, not a schedule.
+
+**Both hazards I asserted were wrong.** Neither self-build's revert nor auto-fix's branch
+switching runs. PRs #1106 and #1109 were commissioned against these phantoms and are now
+closed; #1109 had introduced a root-level command injection while "securing" a dormant lane.
+
+Consequence: the working tree is NOT at risk, worktree isolation is not urgent, and
+auto-fix needs no repair before things that actually execute.
+
+## METHOD CHANGE — diagnose directly, dispatch only for review
+
+Outcome by agent role this mission: **implementers** 9 PRs → 1 merged, 4 closed net-negative.
+**Reviewers** caught every defect (root injection, credential-wiping test, one-character
+owner-only bypass, wrong-constant assertion).
+
+The implementers executed faithfully; the specs were wrong because they came from an
+unverified model of the system. Diagnosis needs accumulated context and stays with the
+primary session. Dispatch only bounded adversarial verification of finished work.
+
+## NEXT (in order)
+1. Land #1111 and #1110 (wave 6 in flight).
+2. **Dependency reduction — 71 vs XClaw's 0.** The one axis where the comparison is
+   unambiguous and actionable. Five `@ai-sdk/*` packages already confirmed imported by zero
+   shipped code.
+3. Redo #1107 (`CREDENTIAL_DIR`) — asserts on the wrong constant; it is the root cause of
+   this mission's original bug chain.
+4. #1114 — owner decision (public repo, concentrates a map of safety-guard posture).
