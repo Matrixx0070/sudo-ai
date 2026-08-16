@@ -9,6 +9,15 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
+
+// Fail-closed guard: if the rate-limit gate ever stops firing first,
+// processIssue must hit this mock — never the real gh CLI / git checkout
+// (that exact escape poisoned full-suite runs on 2026-08-16).
+vi.mock('child_process', () => ({
+  exec: (_cmd: string, cb: (e: Error | null) => void) =>
+    cb(new Error('gh: command not found (mocked test env)')),
+}));
+
 import Database from 'better-sqlite3';
 import { AutoFixTrigger, type AutoFixTriggerDeps, type AutoFixAttempt } from '../../src/core/self-build/auto-fix-trigger.js';
 
