@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -9,8 +9,15 @@ import { describe, expect, it } from 'vitest';
  * Any new tree without a negation was silently dropped from the shipped
  * package (this happened once, to the textproc fallbacks).
  *
- * These tests fail if the blanket rule comes back, or if a shipped Python
- * file stops being tracked by git.
+ * These tests fail if the blanket rule comes back, or if a vendored Python
+ * tree stops being tracked by git.
+ *
+ * They deliberately assert only over git's *index* and over `check-ignore`
+ * probes on hypothetical paths — never over "everything on disk". Walking the
+ * disk made the suite fail on any developer machine that happened to hold an
+ * untracked scratch script, a local `venv/`, or a `__pycache__` under one of
+ * these directories; none of that is a packaging regression, and none of it
+ * can exist in CI (which only ever checks out tracked files).
  */
 
 const REPO = path.resolve(__dirname, '../..');
@@ -28,21 +35,19 @@ const SHIPPED_TREES = [
   'scripts/gemini-web',
 ];
 
-function pyFilesOnDisk(dir: string): string[] {
-  const abs = path.join(REPO, dir);
-  if (!existsSync(abs)) return [];
-  const out: string[] = [];
-  for (const entry of readdirSync(abs)) {
-    const rel = `${dir}/${entry}`;
-    if (statSync(path.join(REPO, rel)).isDirectory()) out.push(...pyFilesOnDisk(rel));
-    else if (entry.endsWith('.py')) out.push(rel);
-  }
-  return out;
+/**
+ * Floor, not an exact count: new vendored scripts land regularly, but a drop
+ * of this magnitude means a tree went missing.
+ */
+const MIN_TRACKED_PY = 60;
+
+function git(args: string[]): string {
+  return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' });
 }
 
-function trackedPyFiles(): Set<string> {
-  const out = execFileSync('git', ['ls-files', '*.py'], { cwd: REPO, encoding: 'utf8' });
-  return new Set(out.split('\n').filter(Boolean));
+/** Tracked `.py` paths under `dir` (index only — dirty worktrees don't matter). */
+function trackedPy(dir: string): string[] {
+  return git(['ls-files', '-z', '--', `${dir}/*.py`]).split('\0').filter(Boolean);
 }
 
 /** true when git would ignore `rel` (the path need not exist). */
@@ -71,18 +76,35 @@ describe('vendored python stays packaged', () => {
     expect(isIgnored('scripts/brand-new-lane/bridge.py')).toBe(false);
   });
 
-  it('tracks every Python file in every shipped vendored tree', () => {
-    const tracked = trackedPyFiles();
-    const missing: string[] = [];
-    let seen = 0;
+  it('keeps every shipped vendored tree tracked, and accepting new files', () => {
+    const empty: string[] = [];
+    const ignoredTrees: string[] = [];
+    let total = 0;
+
     for (const tree of SHIPPED_TREES) {
-      const files = pyFilesOnDisk(tree);
-      expect(files.length, `${tree} has no .py files — tree moved or deleted?`).toBeGreaterThan(0);
-      seen += files.length;
-      for (const f of files) if (!tracked.has(f)) missing.push(f);
+      const files = trackedPy(tree);
+      total += files.length;
+      if (files.length === 0) empty.push(tree);
+      // A tree can also die by having *future* files silently swallowed while
+      // the already-committed ones stay tracked.
+      if (isIgnored(`${tree}/__probe_new_script__.py`)) ignoredTrees.push(tree);
     }
-    expect(missing).toEqual([]);
-    expect(seen).toBeGreaterThanOrEqual(65);
+
+    expect(empty, 'vendored Python trees with no tracked .py — moved, deleted, or ignored').toEqual(
+      [],
+    );
+    expect(ignoredTrees, 'vendored Python trees where a NEW .py would be ignored').toEqual([]);
+    expect(total).toBeGreaterThanOrEqual(MIN_TRACKED_PY);
+  });
+
+  it('has no tracked .py that the ignore rules would swallow', () => {
+    // `ls-files -c -i` lists tracked files matching an ignore rule: exactly the
+    // fingerprint a re-added blanket `*.py` leaves behind. Index-only, so an
+    // untracked scratch file or a local venv cannot trip it.
+    const swallowed = git(['ls-files', '-z', '-c', '-i', '--exclude-standard', '--', '*.py'])
+      .split('\0')
+      .filter(Boolean);
+    expect(swallowed).toEqual([]);
   });
 
   it('still ignores python build artifacts', () => {

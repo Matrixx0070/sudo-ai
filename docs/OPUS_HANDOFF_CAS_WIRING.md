@@ -219,7 +219,7 @@ CW9 design (any time; execution gated on Fable GO)
 - **Semgrep Guardian hook** may block Edit/Write when logged out: fall back to python-in-Bash edits + `./node_modules/.bin/*` direct + manual semgrep scans (established workaround).
 - **Repo invariants (from CLAUDE.md, binding):** memory mutations via memory API only; quarantine/inspectContent for all external content; no hot-path Drive/NotebookLM imports in `src/core/agent`, `src/llm`, `src/core/memory`, `src/core/brain` (hot-path test enforces); frozen identity surfaces stay frozen; every recurring background job declares budgets; two-reader consensus for any automated memory surgery.
 - **PRs:** CI green before merge; commit messages carry the CW-ID; never rewrite main history. Merging your own PR after CI+verification is authorized (established autonomous precedent #806–#813) EXCEPT where a workstream says otherwise.
-- **`.gitignore` line ~81 `*.py`** silently drops Python files — negate explicitly if you add any.
+- **Python is tracked by default** (the old blanket `*.py` ignore + per-tree `!` negations is gone). `.gitignore` now lists only artifacts (`__pycache__/`, `*.pyc`, `.venv/`, `venv/`, `*.egg-info/`, the caches) plus four path-anchored root scratch scripts. Add a vendored `.py` and just `git add` it — no negation needed. `tests/architecture/vendored-python-tracked.test.ts` fails if a blanket rule returns or a vendored tree stops being tracked; never add a rule that would make a new `<tree>/*.py` ignored.
 - **New ToolCategory** needs a `tool-router.ts` CATEGORY_MAP entry or the coverage test fails.
 
 ## 7. First session script (do this literally)
