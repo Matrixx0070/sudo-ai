@@ -1,17 +1,31 @@
-/** @file provider.ts — Multi-provider streaming abstraction for SUDO-AI chat TUI. */
+/**
+ * @file provider.ts — Shared chunk/message types for the SUDO-AI chat TUI,
+ * plus the TUI's config/.env bootstrap.
+ *
+ * This module used to ALSO carry a second, parallel way to serve a turn: it
+ * built an official Anthropic/OpenAI SDK client from whatever API key happened
+ * to sit in the environment and streamed from it directly. Nothing ever called
+ * it. Real turns go App.tsx → TuiAgentAdapter → AgentLoop → Brain →
+ * src/llm/transport.ts, which does its own routing, budgeting and failover.
+ * The SDK path was deleted; what remains is types + the .env bootstrap.
+ */
 
 import fs from 'node:fs';
-import type Anthropic from '@anthropic-ai/sdk';
-import type OpenAI from 'openai';
 import { PATHS } from '../../../core/shared/constants.js';
-import { getProviderApiKey } from '../../../llm/client.js';
-import { PROVIDER_BASE_URLS } from '../../../llm/endpoints.js';
 
 // ---------------------------------------------------------------------------
 // .env loader
 // ---------------------------------------------------------------------------
 
-function loadDotEnv(envPath: string): void {
+/**
+ * Hydrate `process.env` from a dotenv-style file. Keys already present win.
+ *
+ * EXPORTED ON PURPOSE: it is called exactly once, at module scope, with the
+ * real `PATHS.ENV`. Exporting it lets a test exercise the parser against a
+ * tmpdir fixture instead of pointing a test at the live credentials file —
+ * an earlier test that did the latter had to be reverted (commit `1c5523ca`).
+ */
+export function loadDotEnv(envPath: string): void {
   try {
     if (!fs.existsSync(envPath)) return;
     const raw = fs.readFileSync(envPath, 'utf8');
@@ -33,7 +47,24 @@ function loadDotEnv(envPath: string): void {
   } catch { /* non-fatal */ }
 }
 
-// Load .env from project root config/
+// LOAD-BEARING — do not delete, and do not move below the type exports.
+//
+// `sudo-ai chat` is registered in cli/index.ts WITHOUT the `preAction` dotenv
+// hook that `grok` and `voice` install, so this module-scope call is the ONLY
+// thing that hydrates config/.env for the whole TUI process. App.tsx imports
+// this module for DEFAULT_SYSTEM, which is what causes it to run — and it must
+// run at IMPORT time, because paths.ts/constants.ts latch DATA_DIR the first
+// time they are loaded. Hydrating later (e.g. inside runChat()) would be too
+// late for anything already resolved at module load.
+//
+// Measured both directions: with this call, importing cli/commands/chat.js
+// hydrates a sentinel from `<PROJECT_ROOT>/config/.env`; with it commented out
+// the same import leaves the sentinel ABSENT. Pinned by
+// tests/cli/chat/provider-dotenv.test.ts, which runs that protocol in a child
+// process with SUDO_AI_HOME pointed at a tmpdir — never the real config/.env.
+//
+// This is the same class of invisible contract as the DATA_DIR capture
+// documented in agent-loop-adapter.ts — hence the test rather than a comment.
 loadDotEnv(PATHS.ENV);
 
 // ---------------------------------------------------------------------------
@@ -91,11 +122,11 @@ export interface ToolPermissionChunk {
 /**
  * The model that ACTUALLY served the turn, from the agent loop's routing trace.
  *
- * The header must render this rather than {@link getProviderInfo}, which only
- * reports which API key happens to be present on this machine — a value with no
- * connection to the model the Brain used. On a box whose only key was an
- * exhausted OpenAI one, the header read "OpenAI / gpt-4o-mini" while every turn
- * was in fact answered over the Claude seat lane.
+ * The header must render this, and nothing else. The deleted getProviderInfo()
+ * reported whichever API key happened to be present on this machine — a value
+ * with no connection to the model the Brain actually used. On a box whose only
+ * key was an exhausted OpenAI one, the header read "OpenAI / gpt-4o-mini" while
+ * every turn was in fact answered over the Claude seat lane.
  */
 export interface ModelChunk {
   type: 'model';
@@ -114,207 +145,8 @@ export interface ProviderInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Provider resolution
-// ---------------------------------------------------------------------------
-
-interface AnthropicClient {
-  kind: 'anthropic';
-  sdk: Anthropic;
-  info: ProviderInfo;
-}
-
-interface OpenAICompatClient {
-  kind: 'openai-compat';
-  sdk: OpenAI;
-  info: ProviderInfo;
-}
-
-type ProviderClient = AnthropicClient | OpenAICompatClient;
-
-let _clientPromise: Promise<ProviderClient> | null = null;
-
-async function buildClient(): Promise<ProviderClient> {
-  const anthropicKey = getProviderApiKey('anthropic');
-  const ollamaUrl    = process.env['OLLAMA_URL'];
-  const ollamaKey    = process.env['OLLAMA_API_KEY'];
-  const openaiKey    = getProviderApiKey('openai');
-  const xaiKey       = getProviderApiKey('xai');
-  const xaiModel     = process.env['XAI_MODEL'];
-  const xaiBaseUrl   = process.env['XAI_BASE_URL'] ?? PROVIDER_BASE_URLS.xai;
-
-  if (anthropicKey) {
-    const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    const sdk = new Anthropic({ apiKey: anthropicKey, timeout: 30_000 });
-    return {
-      kind: 'anthropic',
-      sdk,
-      info: { provider: 'anthropic', model: 'claude-sonnet-4-6', label: 'Anthropic' },
-    };
-  }
-
-  if (ollamaUrl) {
-    const { default: OpenAI } = await import('openai');
-    const sdk = new OpenAI({ baseURL: `${ollamaUrl}/v1`, apiKey: ollamaKey ?? 'ollama', timeout: 30_000 });
-    return {
-      kind: 'openai-compat',
-      sdk,
-      info: { provider: 'ollama', model: 'deepseek-v4-pro:cloud', label: 'Ollama' },
-    };
-  }
-
-  if (openaiKey) {
-    const { default: OpenAI } = await import('openai');
-    const sdk = new OpenAI({ apiKey: openaiKey, timeout: 30_000 });
-    return {
-      kind: 'openai-compat',
-      sdk,
-      info: { provider: 'openai', model: 'gpt-4o-mini', label: 'OpenAI' },
-    };
-  }
-
-  if (xaiKey) {
-    const { default: OpenAI } = await import('openai');
-    const sdk = new OpenAI({ baseURL: xaiBaseUrl, apiKey: xaiKey, timeout: 30_000 });
-    return {
-      kind: 'openai-compat',
-      sdk,
-      info: { provider: 'xai', model: xaiModel ?? 'grok-4', label: 'xAI' },
-    };
-  }
-
-  throw new Error(
-    'No API key found. Set one of: ANTHROPIC_API_KEY, OLLAMA_URL, OPENAI_API_KEY, XAI_API_KEY'
-  );
-}
-
-export async function getProviderInfo(): Promise<ProviderInfo> {
-  if (!_clientPromise) _clientPromise = buildClient();
-  const client = await _clientPromise;
-  return client.info;
-}
-
-// ---------------------------------------------------------------------------
-// Streaming
+// Default system prompt
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_SYSTEM =
   "You are SUDO-AI, an autonomous agent. Be direct, useful, and act within the owner's goals.";
-
-export async function* chatStream(opts: {
-  messages: ChatMessage[];
-  system?: string;
-  model?: string;
-  signal: AbortSignal;
-}): AsyncGenerator<ProviderChunk> {
-  if (!_clientPromise) _clientPromise = buildClient();
-  const client = await _clientPromise;
-  const model = opts.model ?? client.info.model;
-  const system = opts.system ?? DEFAULT_SYSTEM;
-
-  if (client.kind === 'anthropic') {
-    yield* _streamAnthropic(client.sdk, model, system, opts.messages, opts.signal);
-  } else {
-    yield* _streamOpenAICompat(client.sdk, model, system, opts.messages, opts.signal);
-  }
-}
-
-async function* _streamAnthropic(
-  sdk: Anthropic,
-  model: string,
-  system: string,
-  messages: ChatMessage[],
-  signal: AbortSignal,
-): AsyncGenerator<ProviderChunk> {
-  const stream = sdk.messages.stream({
-    model,
-    max_tokens: 4096,
-    system,
-    messages,
-  });
-
-  // Wire AbortSignal to stream abort
-  const onAbort = (): void => { stream.abort(); };
-  signal.addEventListener('abort', onAbort, { once: true });
-
-  // Track the latest usage seen during the stream; emit a single terminal
-  // 'done' chunk after the loop so consumers that accumulate usage per 'done'
-  // do not double-count (each message_delta carries cumulative usage and
-  // finalMessage repeats the final usage).
-  let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
-
-  try {
-    for await (const event of stream as AsyncIterable<Anthropic.Messages.RawMessageStreamEvent>) {
-      if (signal.aborted) break;
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-        yield { type: 'text', value: event.delta.text };
-      } else if (event.type === 'message_delta' && event.usage) {
-        lastUsage = {
-          inputTokens: event.usage.input_tokens ?? undefined,
-          outputTokens: event.usage.output_tokens,
-        };
-      }
-    }
-    if (!signal.aborted) {
-      const final = await stream.finalMessage().catch(() => null);
-      if (final?.usage) {
-        yield {
-          type: 'done',
-          usage: {
-            inputTokens: final.usage.input_tokens,
-            outputTokens: final.usage.output_tokens,
-          },
-        };
-      } else if (lastUsage) {
-        yield { type: 'done', usage: lastUsage };
-      } else {
-        yield { type: 'done' };
-      }
-    }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes('aborted') && !msg.includes('abort') && !signal.aborted) {
-      throw err;
-    }
-    yield { type: 'done' };
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
-}
-
-async function* _streamOpenAICompat(
-  sdk: OpenAI,
-  model: string,
-  system: string,
-  messages: ChatMessage[],
-  signal: AbortSignal,
-): AsyncGenerator<ProviderChunk> {
-  const oaiMessages = [
-    { role: 'system' as const, content: system },
-    ...messages,
-  ];
-
-  try {
-    const stream = await sdk.chat.completions.create({
-      model,
-      messages: oaiMessages,
-      stream: true,
-      max_tokens: 4096,
-    }, { signal });
-
-    for await (const chunk of stream as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>) {
-      if (signal.aborted) break;
-      const delta = chunk.choices[0]?.delta?.content;
-      if (typeof delta === 'string' && delta.length > 0) {
-        yield { type: 'text', value: delta };
-      }
-    }
-
-    yield { type: 'done' };
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes('aborted') && !msg.includes('abort') && !signal.aborted) {
-      throw err;
-    }
-    yield { type: 'done' };
-  }
-}
