@@ -17,7 +17,15 @@ import { PATHS } from '../../../core/shared/constants.js';
 // .env loader
 // ---------------------------------------------------------------------------
 
-function loadDotEnv(envPath: string): void {
+/**
+ * Hydrate `process.env` from a dotenv-style file. Keys already present win.
+ *
+ * EXPORTED ON PURPOSE: it is called exactly once, at module scope, with the
+ * real `PATHS.ENV`. Exporting it lets a test exercise the parser against a
+ * tmpdir fixture instead of pointing a test at the live credentials file —
+ * an earlier test that did the latter had to be reverted (commit `1c5523ca`).
+ */
+export function loadDotEnv(envPath: string): void {
   try {
     if (!fs.existsSync(envPath)) return;
     const raw = fs.readFileSync(envPath, 'utf8');
@@ -50,8 +58,10 @@ function loadDotEnv(envPath: string): void {
 // late for anything already resolved at module load.
 //
 // Measured both directions: with this call, importing cli/commands/chat.js
-// hydrates a sentinel from config/.env; with it commented out the same import
-// leaves the sentinel ABSENT. Pinned by tests/cli/chat/provider-dotenv.test.ts.
+// hydrates a sentinel from `<PROJECT_ROOT>/config/.env`; with it commented out
+// the same import leaves the sentinel ABSENT. Pinned by
+// tests/cli/chat/provider-dotenv.test.ts, which runs that protocol in a child
+// process with SUDO_AI_HOME pointed at a tmpdir — never the real config/.env.
 //
 // This is the same class of invisible contract as the DATA_DIR capture
 // documented in agent-loop-adapter.ts — hence the test rather than a comment.
