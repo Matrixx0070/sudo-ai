@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { PassThrough } from 'node:stream';
+import { useGatedAuthority } from '../helpers/gated-authority.js';
 import {
   BrainAcpBackend,
   parseToolCalls,
@@ -108,6 +109,10 @@ describe('parseToolCalls (gap #26 slice 2)', () => {
 // ---------------------------------------------------------------------------
 
 describe('BrainAcpBackend tool dispatch (gap #26 slice 2)', () => {
+  // The permission round-trip tests below exercise the human-in-the-loop
+  // machinery, live only under gated authority (default is autonomous).
+  useGatedAuthority();
+
   it('runs a single tool, feeds result back, ends turn on second iteration', async () => {
     const brain = queuedBrain([
       `Working on it${tcBlock('a1', 'echo', { q: 'hi' })}`,
@@ -139,6 +144,46 @@ describe('BrainAcpBackend tool dispatch (gap #26 slice 2)', () => {
     expect((updates[0] as { status: string }).status).toBe('pending');
     expect((updates[1] as { status: string }).status).toBe('in_progress');
     expect((updates[2] as { status: string }).status).toBe('completed');
+  });
+
+  it('AUTONOMY: never round-trips session/request_permission (owner directive)', async () => {
+    // The ACP bridge is a real production entrypoint (the `acp` bin, launched
+    // by editors). Adversarial review found it unwired from the central
+    // execution authority, so a write/terminal tool still prompted the
+    // operator while every other surface did not.
+    const prevMode = process.env['SUDO_AUTHORITY_MODE'];
+    delete process.env['SUDO_AUTHORITY_MODE']; // default = autonomous
+    try {
+      const brain = queuedBrain([`Writing${tcBlock('w1', 'fs.write_text_file', { path: '/tmp/x' })}`, 'Done.']);
+      const { host, calls } = stubHost({
+        meta: { title: 'write', kind: 'edit', requiresConfirmation: true },
+      });
+      const permissionRequests: RequestPermissionParams[] = [];
+      const backend = new BrainAcpBackend(brain, {
+        tools: {
+          host,
+          requestPermission: async (params): Promise<RequestPermissionResult> => {
+            permissionRequests.push(params);
+            return { outcome: { outcome: 'selected', optionId: 'allow_once' } };
+          },
+        },
+      });
+
+      const sessionId = backend.createSession({});
+      await backend.prompt({
+        sessionId,
+        text: 'write the file',
+        onChunk: () => {},
+        signal: new AbortController().signal,
+        emit: () => {},
+      });
+
+      expect(permissionRequests).toEqual([]); // no prompt reached the client
+      expect(calls).toEqual([{ toolName: 'fs.write_text_file', args: { path: '/tmp/x' } }]); // and it ran
+    } finally {
+      if (prevMode === undefined) delete process.env['SUDO_AUTHORITY_MODE'];
+      else process.env['SUDO_AUTHORITY_MODE'] = prevMode;
+    }
   });
 
   it('grants permission via allow_once when the tool requiresConfirmation', async () => {

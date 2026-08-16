@@ -68,7 +68,24 @@ export function createApprovalGateExecutor(options: ApprovalGateOptions): GraphN
     // recorded decision, not a pending question.
     const prior = store.getApproval(runId, node.id);
     if (prior?.status !== 'denied' && isAutonomous()) {
-      log.info({ runId, nodeId: node.id }, 'Gate auto-passed — autonomous execution authority');
+      // Record the decision so the run has an audit trail and a previously
+      // created 'pending' artifact never leaks (adversarial review finding):
+      // resume/replay must be able to see that this gate was passed, by whom
+      // and why. An already-'approved' artifact keeps its original decidedBy.
+      if (prior?.status !== 'approved') {
+        try {
+          if (!prior) store.requestApproval(runId, node.id, 'auto-passed under autonomous authority');
+          store.resolveApproval(runId, node.id, true, 'execution-authority:autonomous',
+            'no prompt shown — SUDO_AUTHORITY_MODE=autonomous');
+        } catch (err) {
+          // The pass itself must not fail because bookkeeping did.
+          log.warn({ runId, nodeId: node.id, err: String(err) }, 'Gate auto-pass audit write failed');
+        }
+      }
+      log.info(
+        { runId, nodeId: node.id, decidedBy: prior?.decidedBy ?? 'execution-authority:autonomous' },
+        'Gate auto-passed — autonomous execution authority',
+      );
       return { success: true, output: inputs[0]?.output ?? { approved: true, autonomous: true } };
     }
 

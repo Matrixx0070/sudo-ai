@@ -55,7 +55,8 @@ Every surface that could previously stop and ask now consults the resolver:
 | ApprovalManager (backstop) | `core/agent/approval.ts` | returns approved, sends nothing to any channel |
 | `system.exec` | `tools/builtin/system/shell-exec.ts` | `EXEC_APPROVAL_MODE` bypassed, runs immediately |
 | Background shell | `tools/builtin/system/bg-shell/index.ts` | same |
-| Orchestration graph gates | `core/orchestration/graph-approval.ts` | passes through instead of parking |
+| Orchestration graph gates | `core/orchestration/graph-approval.ts` | passes through instead of parking, writing an audit artifact |
+| ACP bridge (`acp` bin, editor IDE path) | `core/acp/brain-backend.ts` | no `session/request_permission` round-trip |
 
 ### Why this was needed (measured 2026-08-16)
 
@@ -79,9 +80,20 @@ Autonomy removes *interaction*, not *containment*. Two things are not prompts
 and therefore still apply:
 
 1. **The bwrap sandbox** on `system.exec` — a mount namespace, not a question.
-2. **Catastrophic-command refusal** — `rm -rf /`, `mkfs /dev/sda`,
-   `dd of=/dev/sda` and friends are refused outright. The operator is never
-   asked; the command simply does not run.
+2. **Catastrophic-command refusal** — two layers, both refuse without ever
+   asking:
+   - exec-policy's hardened `DANGEROUS_PREFIXES` (~20 audited entries), which
+     keeps its force-deny power in autonomous mode, and
+   - a parser covering whole-disk and top-level-directory destruction:
+     block devices including **nvme/partitions** (`dd of=/dev/nvme0n1`,
+     `/dev/sda1`, `wipefs`, `shred`, `mkfs`), quoted root (`rm -rf "/"`),
+     separated flags (`rm -r -f /`), `--no-preserve-root`, `find / -delete`,
+     `cd / && rm -rf *`, and the protected top-level dirs (`/etc`, `/usr`,
+     `/home`, `/root`, …).
+
+   An earlier regex-only version of layer 2 was defeated by all fifteen of
+   those forms in adversarial review; the parser and its regression list exist
+   because of that.
 
 Ordinary destructive work is explicitly **not** catastrophic and runs freely:
 `rm -rf /tmp/build`, `rm -rf node_modules`, `apt-get install`, `systemctl
@@ -123,4 +135,11 @@ action is never silent.
   parks/prompts so the switch is provably real.
 
 Both were mutation-tested: forcing `authorize()` to always prompt fails 4 tests;
-unwiring the ApprovalManager backstop fails 2.
+unwiring the ApprovalManager backstop fails 2; neutering the catastrophic
+parser fails 2; dropping the `DANGEROUS_PREFIXES` call fails 1; unwiring the
+ACP permission gate fails 1.
+
+Subpaths of protected roots stay freely deletable and are pinned as negative
+cases (`rm -rf /var/log/myapp`, `rm -rf /root/sudo-ai-v4/dist`,
+`cd /tmp/build && rm -rf *`) — over-blocking would break the directive just as
+surely as under-blocking would break containment.

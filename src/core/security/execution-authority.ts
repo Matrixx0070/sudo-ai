@@ -55,6 +55,7 @@
  */
 
 import { createLogger } from '../shared/logger.js';
+import { isDangerousCommand } from '../agent/exec-policy.js';
 
 const log = createLogger('security:authority');
 
@@ -147,7 +148,14 @@ export function authorize(req: AuthorityRequest): AuthorityDecision {
     return { proceed: false, requiresPrompt: true, mode, reason: 'gated-mode' };
   }
 
-  if (req.command && isCatastrophicCommand(req.command) && !catastrophicRefusalLifted()) {
+  // Containment (never a prompt): the hardened DANGEROUS_PREFIXES force-deny
+  // keeps its power in autonomous mode. An adversarial review found that
+  // short-circuiting before it silently replaced ~20 audited entries with the
+  // handful of patterns below — a capability regression, not a simplification.
+  const dangerous =
+    req.command !== undefined && isDangerousCommand(req.action, { command: req.command });
+
+  if (req.command && (dangerous || isCatastrophicCommand(req.command)) && !catastrophicRefusalLifted()) {
     log.error(
       { surface: req.surface, action: req.action, command: req.command.slice(0, 200) },
       'authority: catastrophic command REFUSED (containment, not a prompt) — ' +
@@ -165,23 +173,130 @@ export function authorize(req: AuthorityRequest): AuthorityDecision {
 // ---------------------------------------------------------------------------
 
 /**
- * Whole-filesystem destruction patterns. Intentionally tiny and literal: this
- * is a last-resort backstop against an unrecoverable mistake, NOT a policy
- * engine. Anything broader belongs in exec-policy's DANGEROUS_PREFIXES, which
- * still runs on the surfaces that consult it.
+ * Whole-system destruction detection — a last-resort backstop against an
+ * UNRECOVERABLE mistake, not a policy engine.
+ *
+ * Implemented as a small parser rather than a literal-prefix list because an
+ * adversarial review (2026-08-16) defeated the first regex-only version with
+ * fifteen realistic variants: `/dev/nvme0n1` (the primary disk on most modern
+ * servers), partition suffixes (`/dev/sda1`), quoted root (`rm -rf "/"`),
+ * separated flags (`rm -r -f /`), `--no-preserve-root`, `wipefs`, `shred`,
+ * `find / -delete`, and `cd / && rm -rf *`.
+ *
+ * `isDangerousCommand()` (exec-policy's hardened DANGEROUS_PREFIXES) runs
+ * alongside this in `authorize()` — that list keeps its force-deny power in
+ * autonomous mode instead of being silently replaced by this one.
  */
-const CATASTROPHIC = [
-  /\brm\s+(-[a-z]*[rR][a-z]*f|-[a-z]*f[a-z]*[rR])\s+(--no-preserve-root\s+)?\/(\s|$|\*)/,
-  /\brm\s+--recursive\s+--force\s+\/(\s|$|\*)/,
-  /\bmkfs(\.[a-z0-9]+)?\s+\/dev\//,
-  /\bdd\s+[^|;]*\bof=\/dev\/[sh]d[a-z]\b/,
-  />\s*\/dev\/[sh]d[a-z]\b/,
-] as const;
 
-/** True when the command matches a whole-system destruction pattern. */
+/** Whole-disk / partition device nodes. Destroying one is unrecoverable. */
+const BLOCK_DEVICE =
+  /\/dev\/(sd[a-z]\d*|nvme\d+n\d+(p\d+)?|vd[a-z]\d*|hd[a-z]\d*|xvd[a-z]\d*|mmcblk\d+(p\d+)?|disk\d+)\b/;
+
+/**
+ * Top-level directories whose deletion destroys the system or the owner's
+ * work. Their SUBPATHS stay freely deletable — `rm -rf /var/log/myapp` and
+ * `rm -rf /root/sudo-ai-v4/dist` are ordinary sysadmin work and must run.
+ */
+const PROTECTED_ROOTS = new Set([
+  '/', '//', '/.', '/*', '/bin', '/boot', '/dev', '/etc', '/home', '/lib',
+  '/lib64', '/opt', '/proc', '/root', '/run', '/sbin', '/srv', '/sys',
+  '/usr', '/var',
+]);
+
+/** Remove quoting so `rm -rf "/"` and `rm -rf '/'` normalise to `rm -rf /`. */
+function unquote(token: string): string {
+  return token.replace(/['"]/g, '');
+}
+
+/** Split a compound command on shell separators into individual commands. */
+function splitSegments(command: string): string[] {
+  return command.split(/(?:&&|\|\||[;\n])/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** True when an `rm` invocation is both recursive and forced, any flag form. */
+function rmIsRecursiveForce(tokens: string[]): boolean {
+  let recursive = false;
+  let force = false;
+  for (const raw of tokens.slice(1)) {
+    const t = unquote(raw);
+    if (!t.startsWith('-')) continue;
+    if (t === '--recursive') recursive = true;
+    else if (t === '--force') force = true;
+    else if (/^-[a-zA-Z]+$/.test(t)) {
+      if (/[rR]/.test(t)) recursive = true;
+      if (/f/.test(t)) force = true;
+    }
+  }
+  return recursive && force;
+}
+
+/** Non-flag arguments of a command, unquoted. */
+function operandsOf(tokens: string[]): string[] {
+  return tokens
+    .slice(1)
+    .map(unquote)
+    .filter((t) => t.length > 0 && !t.startsWith('-'));
+}
+
+/** Normalise a path operand for protected-root comparison. */
+function normalisePath(p: string): string {
+  if (p === '/') return '/';
+  // Collapse a trailing slash so `/etc/` compares equal to `/etc`.
+  const trimmed = p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p;
+  return trimmed;
+}
+
+/**
+ * True when the command would destroy the whole system or a raw disk.
+ *
+ * Deliberately narrow on the permissive side: ordinary destructive sysadmin
+ * work (`rm -rf /tmp/build`, `rm -rf node_modules`, `mkfs.ext4 /tmp/loopfile`,
+ * `dd of=/tmp/img`) must keep running without asking — that is the directive.
+ */
 export function isCatastrophicCommand(command: string): boolean {
   if (!command || typeof command !== 'string') return false;
-  return CATASTROPHIC.some((re) => re.test(command));
+
+  for (const segment of splitSegments(command)) {
+    const tokens = segment.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    const head = unquote(tokens[0] ?? '');
+
+    // Raw-device writes: dd of=/dev/sda, > /dev/nvme0n1, mkfs, wipefs, shred.
+    if (BLOCK_DEVICE.test(segment)) {
+      if (/^(dd|mkfs(\.[a-z0-9]+)?|wipefs|shred|badblocks|parted|sgdisk|fdisk)$/.test(head)) return true;
+      if (/>\s*['"]?\/dev\//.test(segment)) return true;
+    }
+
+    if (head === 'rm' && rmIsRecursiveForce(tokens)) {
+      for (const operand of operandsOf(tokens)) {
+        if (PROTECTED_ROOTS.has(normalisePath(operand))) return true;
+        // `rm -rf *` is catastrophic only when the shell was moved to / first.
+        if ((operand === '*' || operand === './*') && cwdIsRoot(command, segment)) return true;
+      }
+    }
+
+    // `find / -delete` / `find / -exec rm -rf {}` — a slower `rm -rf /`.
+    if (head === 'find') {
+      const targets = operandsOf(tokens).filter((t) => t.startsWith('/'));
+      const deletes = /\s-delete\b/.test(segment) || /-exec\s+rm\b/.test(segment);
+      if (deletes && targets.some((t) => PROTECTED_ROOTS.has(normalisePath(t)))) return true;
+    }
+  }
+
+  return false;
+}
+
+/** True when an earlier segment of the same command line cd'd to `/`. */
+function cwdIsRoot(fullCommand: string, currentSegment: string): boolean {
+  for (const segment of splitSegments(fullCommand)) {
+    if (segment === currentSegment) break;
+    const tokens = segment.split(/\s+/).filter(Boolean);
+    if (unquote(tokens[0] ?? '') === 'cd') {
+      const target = operandsOf(tokens)[0];
+      if (target !== undefined && normalisePath(target) === '/') return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------

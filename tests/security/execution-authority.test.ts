@@ -126,6 +126,41 @@ describe('execution authority — containment is not a prompt', () => {
     expect(d.requiresPrompt).toBe(false);
   });
 
+  it('refuses every bypass form found by adversarial review (2026-08-16)', () => {
+    // Each of these executed under the first regex-only implementation.
+    for (const cmd of [
+      'dd if=/dev/zero of=/dev/nvme0n1',          // primary disk on modern servers
+      'dd if=/dev/zero of=/dev/sda1',             // partition suffix
+      'wipefs -a /dev/sda',
+      'shred -n1 /dev/sda',
+      'rm -rf "/"',                                // quoted root
+      "rm -rf '/'",
+      'rm -r -f /',                                // separated flags
+      'rm -rf --no-preserve-root /',
+      'rm --recursive --force --no-preserve-root /',
+      'find / -delete',
+      'find / -exec rm -rf {} +',
+      'cd / && rm -rf *',
+      'rm -rf /home',
+      'rm -rf /etc',
+      'rm -rf /usr',
+      'rm -rf //',
+      'rm -rf /.',
+    ]) {
+      const d = authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd });
+      expect(d.proceed, `must refuse: ${cmd}`).toBe(false);
+      expect(d.requiresPrompt, `must not prompt: ${cmd}`).toBe(false);
+    }
+  });
+
+  it('keeps the hardened DANGEROUS_PREFIXES force-deny alive in autonomous mode', () => {
+    // These come from exec-policy's audited list, not the local regexes —
+    // the review caught the autonomy bypass silently disabling them.
+    for (const cmd of ['rm -rf ~', 'rm -rf $HOME']) {
+      expect(authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd }).proceed, cmd).toBe(false);
+    }
+  });
+
   it('classifies catastrophic vs ordinary destructive commands', () => {
     for (const bad of [
       'rm -rf /',
@@ -146,6 +181,11 @@ describe('execution authority — containment is not a prompt', () => {
       'rm -rf /root/sudo-ai-v4/dist',
       'dd if=/dev/zero of=/tmp/img bs=1M count=10',
       'mkfs.ext4 /tmp/loopfile',
+      'rm -rf /var/log/myapp',
+      'rm -rf /home/frank/scratch',
+      'rm -rf /etc/nginx/sites-enabled/old.conf',
+      'find /tmp/cache -delete',
+      'cd /tmp/build && rm -rf *',
     ]) {
       expect(isCatastrophicCommand(ok), ok).toBe(false);
     }
