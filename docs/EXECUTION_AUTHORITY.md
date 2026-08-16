@@ -74,6 +74,40 @@ That drift class is what centralization removes.
 
 ---
 
+## God mode — unlimited authority, owner-locked
+
+**Owner directive (2026-08-16):** sudo-ai has god-level access to the system it
+lives on, reacts only to the owner's commands, and can do anything needed to
+complete an objective without a human touching the machine.
+
+```bash
+SUDO_AUTHORITY_GOD_MODE=1
+```
+
+With it set, a request the authority can attribute to the **verified owner**
+proceeds past every containment check — including the catastrophic-command
+refusal. Nothing prompts, ever.
+
+The owner condition is what makes unlimited power safe to grant, and it is the
+second half of the directive ("react only to the owner's command"):
+
+| caller | god mode applies? |
+|---|---|
+| Verified owner (authenticated peer on an owner-listed id) | **yes — unlimited** |
+| Non-owner chat peer, pairing-admitted user | no — containment holds |
+| Cron, webhooks, remote workers, MCP callers, anything unattributed | no — containment holds |
+
+`ownerVerified` is threaded from the channel adapter's authenticated peer check
+(`ToolContext.isOwner`), never from anything the model can set. On Telegram
+that resolves to the constructor allowlist (`TELEGRAM_CHAT_ID`) — pairing-
+admitted users are explicitly excluded from owner status.
+
+A god-mode pass logs at `warn` with the surface, action and command, so
+unlimited authority is always *recorded*, even though it is never *questioned*.
+
+`SUDO_AUTHORITY_ALLOW_CATASTROPHIC=1` remains the unconditional lift for
+headless contexts the owner explicitly trusts (no attribution required).
+
 ## What autonomy does NOT remove
 
 Autonomy removes *interaction*, not *containment*. Two things are not prompts

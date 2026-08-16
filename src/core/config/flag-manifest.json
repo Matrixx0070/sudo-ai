@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 822,
+  "count": 823,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -55,6 +55,7 @@
     "SUDO_ARTIFACT_SIGNER_ID",
     "SUDO_AUDIT_CHAIN_URL",
     "SUDO_AUTHORITY_ALLOW_CATASTROPHIC",
+    "SUDO_AUTHORITY_GOD_MODE",
     "SUDO_AUTHORITY_MODE",
     "SUDO_AUTH_ROTATION_DISABLE",
     "SUDO_AUTOBUGFIX",

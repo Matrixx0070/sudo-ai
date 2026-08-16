@@ -24,6 +24,7 @@ const ENV_KEYS = [
   'SUDO_AUTHORITY_MODE',
   'SUDO_AUTO_APPROVE',
   'SUDO_AUTHORITY_ALLOW_CATASTROPHIC',
+  'SUDO_AUTHORITY_GOD_MODE',
 ] as const;
 
 let saved: Record<string, string | undefined>;
@@ -244,6 +245,33 @@ describe('execution authority — containment is not a prompt', () => {
     }
   });
 
+  it('refuses whole-home wipes through every spelling (round-5 hole)', () => {
+    for (const cmd of [
+      'rm -rf $HOME/', 'rm -rf ~/', 'rm -rf ${HOME}/', 'rm -rf $HOME/.',
+      'rm -rf $HOME//', 'rm -rf "$HOME"', 'rm -rf "$HOME/"', 'rm -rf ~',
+      'rm -rf $HOME', 'rm -rf ${HOME}',
+    ]) {
+      expect(authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd }).proceed,
+        `must refuse: ${cmd}`).toBe(false);
+    }
+  });
+
+  it('allows a FILTERED system-wide sweep (round-5 false positive)', () => {
+    for (const cmd of [
+      'find / -name "*.pyc" -delete',
+      'find / -type f -name core -delete',
+      'find / -mtime +30 -name "*.tmp" -delete',
+    ]) {
+      expect(authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd }).proceed,
+        `must run: ${cmd}`).toBe(true);
+    }
+    // …but an UNFILTERED sweep is still `rm -rf /` by another name.
+    for (const cmd of ['find / -delete', 'find / -exec rm -rf {} +']) {
+      expect(authorize({ surface: 'shell-exec', action: 'system.exec', command: cmd }).proceed,
+        `must refuse: ${cmd}`).toBe(false);
+    }
+  });
+
   it('does NOT over-block legitimate work (over-blocking breaks the directive)', () => {
     for (const cmd of [
       'mkfs.ext4 /tmp/loop.img',        // loopback image — refused by the old bare `mkfs.` ban
@@ -312,5 +340,47 @@ describe('execution authority — containment is not a prompt', () => {
   it('tolerates empty/garbage input', () => {
     expect(isCatastrophicCommand('')).toBe(false);
     expect(isCatastrophicCommand(undefined as unknown as string)).toBe(false);
+  });
+});
+
+describe('execution authority — GOD MODE (owner directive)', () => {
+  it('gives the VERIFIED OWNER unlimited authority over this host', () => {
+    process.env['SUDO_AUTHORITY_GOD_MODE'] = '1';
+    for (const cmd of ['rm -rf /', 'mkfs.ext4 /dev/sda', 'dd if=/dev/zero of=/dev/nvme0n1', 'rm -rf $HOME']) {
+      const d = authorize({
+        surface: 'shell-exec', action: 'system.exec', command: cmd, ownerVerified: true,
+      });
+      expect(d.proceed, `owner must be able to run: ${cmd}`).toBe(true);
+      expect(d.requiresPrompt).toBe(false);
+      expect(d.reason).toBe('god-mode-owner');
+    }
+  });
+
+  it('does NOT extend god mode to unattributed or non-owner callers', () => {
+    process.env['SUDO_AUTHORITY_GOD_MODE'] = '1';
+    // cron / webhook / remote worker / a stranger on a channel
+    for (const ownerVerified of [undefined, false]) {
+      const d = authorize({
+        surface: 'shell-exec', action: 'system.exec', command: 'rm -rf /', ownerVerified,
+      });
+      expect(d.proceed, 'containment must hold for non-owner').toBe(false);
+      expect(d.requiresPrompt, 'and it must still never prompt').toBe(false);
+    }
+  });
+
+  it('is OFF by default — owner attribution alone does not lift containment', () => {
+    const d = authorize({
+      surface: 'shell-exec', action: 'system.exec', command: 'rm -rf /', ownerVerified: true,
+    });
+    expect(d.proceed).toBe(false);
+  });
+
+  it('never turns god mode into a prompt', () => {
+    process.env['SUDO_AUTHORITY_GOD_MODE'] = '1';
+    for (const ownerVerified of [true, false, undefined]) {
+      expect(authorize({
+        surface: 'shell-exec', action: 'system.exec', command: 'rm -rf /', ownerVerified,
+      }).requiresPrompt).toBe(false);
+    }
   });
 });

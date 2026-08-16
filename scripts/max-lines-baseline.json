@@ -107,7 +107,6 @@
   "src/core/security/bash-ast-types.ts": 451,
   "src/core/security/bash-ast.ts": 1282,
   "src/core/security/config-5pillar.ts": 465,
-  "src/core/security/execution-authority.ts": 436,
   "src/core/security/signer.ts": 667,
   "src/core/security/vault-credentials.ts": 654,
   "src/core/self-build/auto-fix-trigger.test.ts": 482,
