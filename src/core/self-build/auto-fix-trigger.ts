@@ -17,7 +17,7 @@ import { createLogger } from '../shared/logger.js';
 import type { ErrorMemory } from '../health/error-memory.js';
 import type { GitHubRepo } from '../tools/builtin/dev/github-integration.js';
 import { createPR, getRepoInfo } from '../tools/builtin/dev/github-integration.js';
-import { withAutoFixWorktree, WorktreeSetupError } from './git-worktree.js';
+import { withAutoFixWorktree, WorktreeSetupError, WorktreeBusyError } from './git-worktree.js';
 import type { WorktreeOptions } from './git-worktree.js';
 
 const log = createLogger('self-build:auto-fix-trigger');
@@ -375,6 +375,12 @@ export class AutoFixTrigger {
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof WorktreeBusyError) {
+        // An earlier tick is still inside its run; overlapping them is what the
+        // lane lock exists to prevent. Skip quietly — the cron fires again soon.
+        log.info({ issueNumber: issue.number, err: msg }, '_triggerFix: auto-fix lane busy — skipping');
+        return { success: false, reason: 'lane-busy' };
+      }
       if (err instanceof WorktreeSetupError) {
         log.error({ issueNumber: issue.number, err: msg }, '_triggerFix: branch creation failed');
         return { success: false, reason: 'branch-failed' };

@@ -11,16 +11,21 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
+import { createRequire } from 'module';
+import { pathToFileURL } from 'url';
 import {
   withAutoFixWorktree,
   pruneAutoFixWorktrees,
+  acquireLaneLock,
   WorktreeSetupError,
+  WorktreeBusyError,
   WORKTREE_PREFIX,
+  LANE_LOCK_NAME,
 } from '../../src/core/self-build/git-worktree.js';
 
 const sh = promisify(exec);
@@ -44,7 +49,30 @@ beforeEach(async () => {
   await sh('git add -A && git commit -m seed', { cwd: repoRoot });
 });
 
+const liveChildren: Array<{ kill(): void }> = [];
+
+/** A REAL live process, so liveness checks are not mocked into agreeing. */
+function spawnLiveProcess(): number {
+  const child = spawn('sleep', ['60'], { stdio: 'ignore' });
+  liveChildren.push(child);
+  return child.pid!;
+}
+
+/** A REAL pid that has exited — the "owner died" case. */
+async function spawnDeadPid(): Promise<number> {
+  const child = spawn('true', [], { stdio: 'ignore' });
+  const pid = child.pid!;
+  await new Promise<void>((r) => child.on('exit', () => r()));
+  // The pid is reaped by the time 'exit' fires; kill(pid, 0) now throws ESRCH.
+  return pid;
+}
+
+async function writeOwnerSidecar(target: string, pid: number, startedAt = Date.now()): Promise<void> {
+  await fs.writeFile(target, JSON.stringify({ pid, host: os.hostname(), startedAt }), 'utf8');
+}
+
 afterEach(async () => {
+  for (const child of liveChildren.splice(0)) child.kill();
   await fs.rm(path.dirname(repoRoot), { recursive: true, force: true }).catch(() => undefined);
 });
 
@@ -121,7 +149,7 @@ describe('withAutoFixWorktree', () => {
 });
 
 describe('pruneAutoFixWorktrees', () => {
-  it('reclaims an abandoned worktree older than the stale window', async () => {
+  it('reclaims an abandoned worktree with no owner, older than the stale window', async () => {
     // Simulate a crash: create the worktree and leave it registered.
     const dir = path.join(baseDir, `${WORKTREE_PREFIX}999-abandoned`);
     await fs.mkdir(baseDir, { recursive: true });
@@ -150,10 +178,199 @@ describe('pruneAutoFixWorktrees', () => {
     await sh(`git worktree remove "${dir}" --force`, { cwd: repoRoot });
   });
 
+  it('MEASURED BUG: keeps a LIVE run\'s worktree even when it is older than the stale window', async () => {
+    // The old guard compared directory mtime to a 60-minute window, so a slow or
+    // hung run (mtime does not advance while it waits on `gh`) had its worktree
+    // deleted out from under it by the next tick. Liveness, not age, decides.
+    const dir = path.join(baseDir, `${WORKTREE_PREFIX}997-slow`);
+    await fs.mkdir(baseDir, { recursive: true });
+    await sh(`git worktree add "${dir}" -b auto-fix/997-slow`, { cwd: repoRoot });
+    await writeOwnerSidecar(`${dir}.owner.json`, spawnLiveProcess());
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    await fs.utimes(dir, old, old);
+
+    const removed = await pruneAutoFixWorktrees({ repoRoot, baseDir });
+
+    expect(removed).toBe(0);
+    expect((await fs.stat(dir)).isDirectory()).toBe(true);
+    await sh(`git worktree remove "${dir}" --force`, { cwd: repoRoot });
+  });
+
+  it('reclaims a fresh worktree whose owner process is dead (no waiting for a timeout)', async () => {
+    const dir = path.join(baseDir, `${WORKTREE_PREFIX}996-crashed`);
+    await fs.mkdir(baseDir, { recursive: true });
+    await sh(`git worktree add "${dir}" -b auto-fix/996-crashed`, { cwd: repoRoot });
+    await writeOwnerSidecar(`${dir}.owner.json`, await spawnDeadPid());
+
+    const removed = await pruneAutoFixWorktrees({ repoRoot, baseDir });
+
+    expect(removed).toBe(1);
+    await expect(fs.stat(dir)).rejects.toThrow();
+    await expect(fs.stat(`${dir}.owner.json`)).rejects.toThrow();
+    const { stdout: list } = await sh('git worktree list', { cwd: repoRoot });
+    expect(list).not.toContain(WORKTREE_PREFIX);
+  });
+
   it('is a no-op when the base dir does not exist', async () => {
     await expect(
       pruneAutoFixWorktrees({ repoRoot, baseDir: path.join(baseDir, 'nope') }),
     ).resolves.toBe(0);
+  });
+});
+
+describe('lane lock (overlapping cron ticks)', () => {
+  it('refuses a genuinely concurrent second run while the first is inside its body', async () => {
+    let inside = 0;
+    let maxConcurrent = 0;
+    let firstEntered!: () => void;
+    const entered = new Promise<void>((r) => (firstEntered = r));
+    let releaseFirst!: () => void;
+    const hold = new Promise<void>((r) => (releaseFirst = r));
+
+    const body = async () => {
+      inside++;
+      maxConcurrent = Math.max(maxConcurrent, inside);
+      firstEntered();
+      await hold;
+      inside--;
+      return 'ok';
+    };
+
+    const first = withAutoFixWorktree('auto-fix/20-first', body, { repoRoot, baseDir });
+    await entered;
+
+    // Second tick fires while the first is demonstrably still running.
+    await expect(
+      withAutoFixWorktree('auto-fix/21-second', body, { repoRoot, baseDir }),
+    ).rejects.toBeInstanceOf(WorktreeBusyError);
+
+    releaseFirst();
+    await expect(first).resolves.toBe('ok');
+    expect(maxConcurrent).toBe(1);
+
+    // Exactly one worktree ever existed, and it is gone now.
+    const left = (await fs.readdir(baseDir)).filter((e) => e.startsWith(WORKTREE_PREFIX));
+    expect(left).toEqual([]);
+  });
+
+  it('races two invocations: exactly one wins, the loser is WorktreeBusyError', async () => {
+    const started: string[] = [];
+    const run = (n: number) =>
+      withAutoFixWorktree(
+        `auto-fix/3${n}-race`,
+        async () => {
+          started.push(`r${n}`);
+          await new Promise((r) => setTimeout(r, 150));
+          return n;
+        },
+        { repoRoot, baseDir },
+      );
+
+    const results = await Promise.allSettled([run(1), run(2)]);
+    const ok = results.filter((r) => r.status === 'fulfilled');
+    const failed = results.filter((r) => r.status === 'rejected');
+
+    expect(ok).toHaveLength(1);
+    expect(failed).toHaveLength(1);
+    expect((failed[0] as PromiseRejectedResult).reason).toBeInstanceOf(WorktreeBusyError);
+    expect(started).toHaveLength(1);
+  });
+
+  it('a lock held by a LIVE foreign process blocks', async () => {
+    const lockDir = path.join(baseDir, LANE_LOCK_NAME);
+    await fs.mkdir(lockDir, { recursive: true });
+    await writeOwnerSidecar(path.join(lockDir, 'owner.json'), spawnLiveProcess());
+
+    await expect(acquireLaneLock(baseDir)).rejects.toBeInstanceOf(WorktreeBusyError);
+    await expect(
+      withAutoFixWorktree('auto-fix/40-blocked', async () => 'nope', { repoRoot, baseDir }),
+    ).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  it('a lock held by a DEAD process does not wedge the lane', async () => {
+    const lockDir = path.join(baseDir, LANE_LOCK_NAME);
+    await fs.mkdir(lockDir, { recursive: true });
+    await writeOwnerSidecar(path.join(lockDir, 'owner.json'), await spawnDeadPid());
+
+    const out = await withAutoFixWorktree('auto-fix/41-after-crash', async () => 'recovered', {
+      repoRoot,
+      baseDir,
+    });
+    expect(out).toBe('recovered');
+    await expect(fs.stat(lockDir)).rejects.toThrow(); // released, not leaked
+  });
+
+  it('releases the lock when the body throws, so the next tick can run', async () => {
+    await expect(
+      withAutoFixWorktree('auto-fix/42-boom', async () => {
+        throw new Error('kaboom');
+      }, { repoRoot, baseDir }),
+    ).rejects.toThrow(/kaboom/);
+
+    const out = await withAutoFixWorktree('auto-fix/43-next', async () => 'next ran', {
+      repoRoot,
+      baseDir,
+    });
+    expect(out).toBe('next ran');
+  });
+
+  it('holds across REAL processes: a live child blocks, and SIGKILLing it unwedges the lane', async () => {
+    // Two OS processes, not two promises: the lock must live on the filesystem.
+    const require_ = createRequire(import.meta.url);
+    // `--import tsx` keeps the lock owner in THIS child pid; `tsx <file>` would
+    // fork a grandchild and the recorded pid would survive killing the wrapper.
+    const tsxEntry = require_.resolve('tsx');
+    const moduleUrl = new URL('../../src/core/self-build/git-worktree.ts', import.meta.url).href;
+    const script = path.join(path.dirname(repoRoot), 'holder.mts');
+    await fs.writeFile(
+      script,
+      `const { acquireLaneLock } = await import(${JSON.stringify(moduleUrl)});\n` +
+        `await acquireLaneLock(process.argv[2]);\n` +
+        `process.stdout.write('ACQUIRED\\n');\n` +
+        `await new Promise(() => {});\n`,
+      'utf8',
+    );
+
+    const child = spawn(process.execPath, ['--import', pathToFileURL(tsxEntry).href, script, baseDir], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    liveChildren.push(child);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('child never acquired the lock')), 30_000);
+      child.stdout.on('data', (b: Buffer) => {
+        if (b.toString().includes('ACQUIRED')) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      child.on('exit', (code) => reject(new Error(`holder exited early: ${code}`)));
+    });
+
+    // Live holder in another process -> this process must NOT get the lane.
+    await expect(
+      withAutoFixWorktree('auto-fix/50-cross-process', async () => 'nope', { repoRoot, baseDir }),
+    ).rejects.toBeInstanceOf(WorktreeBusyError);
+
+    // SIGKILL: no release() runs, the lock file stays behind with a dead pid.
+    child.removeAllListeners('exit');
+    const exited = new Promise<void>((r) => child.on('exit', () => r()));
+    child.kill('SIGKILL');
+    await exited;
+    expect((await fs.stat(path.join(baseDir, LANE_LOCK_NAME))).isDirectory()).toBe(true);
+
+    await expect(
+      withAutoFixWorktree('auto-fix/51-after-kill', async () => 'unwedged', { repoRoot, baseDir }),
+    ).resolves.toBe('unwedged');
+  }, 60_000);
+
+  it('releases the lock when worktree SETUP fails', async () => {
+    await expect(
+      withAutoFixWorktree('main', async () => 'unreachable', { repoRoot, baseDir }),
+    ).rejects.toBeInstanceOf(WorktreeSetupError);
+    await expect(fs.stat(path.join(baseDir, LANE_LOCK_NAME))).rejects.toThrow();
+    await expect(
+      withAutoFixWorktree('auto-fix/44-after-setup-failure', async () => 'ok', { repoRoot, baseDir }),
+    ).resolves.toBe('ok');
   });
 });
 
