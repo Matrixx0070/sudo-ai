@@ -130,3 +130,48 @@ change the code under test, never point a test at production state.
 - PR #1111's new test breaks `check:arch` on developer machines; `docs/OPUS_HANDOFF_CAS_WIRING.md:222`
   still instructs contributors to use the removed `*.py` pattern.
 - 5 `@ai-sdk/*` packages sit in `dependencies` imported by zero shipped code → `devDependencies`.
+
+---
+
+## BLOCKER — subagent orchestration is DOWN (owner action required)
+
+11 agents across waves 3 and 4 failed with:
+
+> `Your organization has disabled Claude subscription access for Claude Code · Use an
+> Anthropic API key instead, or ask your admin to enable access`
+
+This is an account/entitlement block, not a code problem. **I cannot fix it from inside the
+session.** Until it is resolved, multi-agent orchestration is unavailable and the review
+lenses — the only thing that has caught every defect so far — cannot run.
+
+Owner options: re-enable Claude Code subscription access for the org, or supply an
+`ANTHROPIC_API_KEY` for subagents (note: the metered anthropic API-key lane was previously
+recorded as dead, so verify it before relying on it).
+
+## PR INVENTORY — review status is the merge gate
+
+**RULE: do not merge a PR that has not completed adversarial review.** Every unreviewed
+agent PR in this mission so far has contained a defect, including one that would have
+destroyed the live credentials file while CI was green.
+
+| PR | what | review | mergeable? |
+|---|---|---|---|
+| #1112 | argv-array exec for the git worktree lane (no shell) | ✅ 3 lenses | assess findings, then likely YES |
+| #1113 | ADR 0012 — which OpenClaw patterns to adopt / reject | ✅ 3 lenses | docs-only; assess then merge |
+| #1111 | stop ignoring Python by default; artifacts only | ✅ 3 lenses (CI green, 79 .py identical) | fix dev-machine `check:arch` break + stale doc first |
+| #1110 | delete dead SDK path in the chat surface | ✅ 3 lenses | live-secrets test REMOVED (1c5523ca); re-review that commit |
+| #1109 | auto-fix cron stops mutating the live tree | ✅ 3 lenses | concurrency guard proven NOT to work — needs rework |
+| #1106 | tick skips a dirty tree instead of "cleaning" it | ❌ **all 3 lenses failed (auth)** | **NO** |
+| #1107 | CREDENTIAL_DIR + credentialPath (ADR 0011 1-3) | ❌ **all 3 lenses failed (auth)** | **NO** |
+| #1114 | first scaffolding sweep — audit + 1 deletion | ❌ **all 3 lenses failed (auth)** | **NO** |
+| #1108 | browser per-process profile fork | ❌ rework agent failed (auth); still v1 w/ CONCERNS | **NO** |
+
+Note #1106 and #1107 appear to have addressed their wave-1 rejections (titles changed to
+"skip a dirty tree instead of cleaning it" and "CREDENTIAL_DIR", i.e. the Gate 8 finding and
+the env-var collision). **That is inference from PR titles, not verification.** Both still
+need the review that failed to run.
+
+### First actions when orchestration is restored
+1. Review #1106, #1107, #1114 (never reviewed) and #1110's post-fix commit.
+2. Rework #1109 (concurrency guard) and #1108 (never reworked).
+3. Then merge in dependency order, CI green, one at a time.
