@@ -13,12 +13,12 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DATA_DIR } from '../core/shared/paths.js';
+import { credentialPath } from '../core/shared/paths.js';
 import { createLogger } from '../core/shared/logger.js';
 
 const log = createLogger('llm:gemini-gpsoauth-reauth');
 
-const DEFAULT_SEED = path.join(DATA_DIR, 'gemini-gpsoauth-seed.json');
+const DEFAULT_SEED = credentialPath('gemini-gpsoauth-seed.json');
 // Resolve the python mint relative to this module (cwd-independent): src/llm -> scripts/.
 const MINT_SCRIPT = fileURLToPath(new URL('../../scripts/gemini-web/gpsoauth_mint.py', import.meta.url));
 

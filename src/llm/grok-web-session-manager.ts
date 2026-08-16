@@ -2,7 +2,7 @@
  * @file grok-web-session-manager.ts
  * @description GW3 — long-term manager for a captured grok.com web session.
  *
- * Mirrors src/llm/xai-oauth-manager.ts (singleton accessor, DATA_DIR
+ * Mirrors src/llm/xai-oauth-manager.ts (singleton accessor, credential-root
  * persistence, 0600 atomic writes, needs-relogin discipline, secrets never
  * logged) but the credential is a captured BROWSER session, not an OAuth token:
  * a grok.com Cookie header + User-Agent (+ an x-statsig-id for the video lane).
@@ -23,7 +23,7 @@
 
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './grok-runtime.js';
+import { credentialPath } from './grok-runtime.js';
 import { writeFileAtomic } from './grok-runtime.js';
 import { createLogger } from './grok-runtime.js';
 import {
@@ -34,7 +34,9 @@ import {
 
 const log = createLogger('llm:grok-web-session');
 
-const DEFAULT_STORE_PATH = path.join(DATA_DIR, 'grok-web-session.json');
+// Cookie + statsigId = the PRINCIPAL's credential, so this store follows the
+// credential root, not the instance state root (ADR 0011).
+const DEFAULT_STORE_PATH = credentialPath('grok-web-session.json');
 
 /** cf_clearance staleness horizon for a proactive probe (informational). */
 const DEFAULT_UA =
@@ -299,7 +301,7 @@ export class GrokWebSessionManager {
 
 let singleton: GrokWebSessionManager | null = null;
 
-/** Process-wide manager over <DATA_DIR>/grok-web-session.json, created lazily. */
+/** Process-wide manager over <CREDENTIAL_DIR>/grok-web-session.json, created lazily. */
 export function getGrokWebSessionManager(): GrokWebSessionManager {
   if (!singleton) singleton = new GrokWebSessionManager();
   return singleton;

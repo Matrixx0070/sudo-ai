@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 820,
+  "count": 821,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -186,6 +186,7 @@
     "SUDO_COST_RETENTION_DAYS",
     "SUDO_COST_TRACKING",
     "SUDO_CRASH_SAFE",
+    "SUDO_CREDENTIAL_DIR",
     "SUDO_CRED_VAULT_DIR",
     "SUDO_CROSS",
     "SUDO_CROSS_CONTROL_DISABLE",

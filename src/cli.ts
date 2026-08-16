@@ -4606,8 +4606,15 @@ ${question}`, kb);
   try {
     const { loadOrCreateDeviceIdentity, defaultIdentityPath } =
       await import('./core/fleet/device-identity.js');
+    // State root (fleet.db etc) — unchanged.
     const dataDir = process.env['DATA_DIR'] ?? '/tmp';
-    fleetIdentity = loadOrCreateDeviceIdentity(defaultIdentityPath(dataDir));
+    // Identity: no argument, so it resolves to <CREDENTIAL_DIR>/device-identity.json
+    // (ADR 0011).
+    // Previously `process.env['DATA_DIR'] ?? '/tmp'` — identical wherever
+    // DATA_DIR is set (prod + staging both set it in ecosystem.config.cjs),
+    // and no longer drops the device key into world-writable /tmp when it is
+    // not (a real leak: /tmp/device-identity.json exists, dated 2026-06-14).
+    fleetIdentity = loadOrCreateDeviceIdentity(defaultIdentityPath());
     log.info({ deviceId: fleetIdentity.deviceId }, 'Fleet device identity loaded (#28c slice 1)');
 
     if (process.env['SUDO_FLEET_REGISTRAR_MODE'] === '1') {

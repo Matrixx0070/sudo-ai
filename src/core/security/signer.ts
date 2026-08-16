@@ -28,7 +28,7 @@ import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import type { SignedArtifact, ArtifactVerifyResult } from '../shared/wave10-types.js';
 import { KeyRotationStore, type KeyRotationRow } from './key-rotation-store.js';
-import { DATA_DIR } from '../shared/paths.js';
+import { credentialPath } from '../shared/paths.js';
 
 const log = createLogger('security:signer');
 
@@ -45,7 +45,10 @@ const MAX_KEYGEN_ATTEMPTS = 3;
 // ---------------------------------------------------------------------------
 
 function getKeyDir(): string {
-  return process.env['SUDO_SIGNER_KEY_DIR'] ?? path.join(DATA_DIR, 'keys');
+  // SUDO_SIGNER_KEY_DIR is the ad-hoc identity-root override that predates
+  // ADR 0011; kept for compatibility, but the fallback is now the named
+  // identity root rather than the instance state root.
+  return process.env['SUDO_SIGNER_KEY_DIR'] ?? credentialPath('keys');
 }
 
 /** Path for versioned private key file. */
