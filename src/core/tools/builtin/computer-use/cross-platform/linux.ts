@@ -279,6 +279,9 @@ export class LinuxComputerUse implements IComputerUse {
       type: params.action as ScreenAction['type'],
       x: params.x,
       y: params.y,
+      // Carry text so gui({action:'type'}) actually types — the earlier
+      // omission silently dropped the payload for keyboard entry.
+      text: typeof params['text'] === 'string' ? (params['text'] as string) : undefined,
       key: params.key,
       direction: params.direction as 'up' | 'down' | undefined,
     };

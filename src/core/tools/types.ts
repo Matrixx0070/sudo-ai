@@ -47,6 +47,7 @@ export type ToolCategory =
   | 'spreadsheet'
   | 'code'
   | 'github'
+  | 'computer'
   | 'custom';
 
 // ---------------------------------------------------------------------------

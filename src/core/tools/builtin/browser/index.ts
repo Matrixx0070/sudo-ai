@@ -53,7 +53,11 @@ import { mouseTool } from './mouse.js';
 import { networkTool } from './network.js';
 import { consoleTool } from './console-log.js';
 import { historyTool } from './history.js';
-import { registerComputerUseTools } from './computer-use-tool.js';
+// Note: the old `computer.use` tool (browser/computer-use-tool.ts) was retired
+// in the Computer Use Backend Phase 0 consolidation. The single computer-use
+// path is now the `computer.*` family in builtin/computer-use/, auto-registered
+// by the loader. The low-level primitive (executeComputerAction) is still
+// re-exported below and reused by the cross-platform Linux driver.
 
 /** All browser tools in stable registration order. */
 export const BROWSER_TOOLS = [
@@ -93,7 +97,6 @@ export function registerBrowserTools(registry: ToolRegistry): void {
   for (const tool of BROWSER_TOOLS) {
     registry.register(tool);
   }
-  registerComputerUseTools(registry);
 }
 
 // Upgrade 57: Computer Use Agent

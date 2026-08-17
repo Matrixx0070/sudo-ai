@@ -4,7 +4,8 @@
  *
  * SUDO-AI 100x: same OpenClaw/Hermes class but 100x + full 3-OS control uncensored per SOUL.
  * Tests: unified API, learner on EVERY, KAIROS/arsenal hook, autonomy wiring, 0 refusals (SOUL), sandbox cross, metrics (success/coverage/learning rate > baselines).
- * No overlap with browser/computer-use-tool.test.ts (this is internal cross control for autonomy/full power).
+ * Complements tests/tools/computer-family.test.ts (the registered computer.* surface);
+ * this file exercises the internal IComputerUse cross-platform driver directly.
  *
  * Run: vitest run tests/tools/computer-use-cross-platform.test.ts
  */

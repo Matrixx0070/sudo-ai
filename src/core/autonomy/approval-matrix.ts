@@ -92,6 +92,14 @@ export const DEFAULT_RULES: Omit<ApprovalRule, 'id' | 'createdAt' | 'updatedAt'>
   { pattern: 'control.exec:rm -rf', tier: 'never', reason: 'Destructive — blocked by default (owner can override via preferences)' },
   { pattern: 'control.file.write', tier: 'notify', reason: 'File mutate - notify' },
   { pattern: 'control.gui.*', tier: 'auto', reason: 'GUI/desktop full power (SOUL)' },
+
+  // Computer Use Backend: the agent-facing `computer.*` family (screen/input/window).
+  // Read-only capture auto-approves; synthetic input is owner-controlled and
+  // auto-approved by default, with the same sandbox/kill-switch/veto safety net
+  // as control.*. Tighten to 'notify'/'confirm' here to require prompts.
+  { pattern: 'computer.*', tier: 'auto', reason: 'Screen/input/window control — owner-controlled, auto-approved by default' },
+  { pattern: 'computer.screenshot', tier: 'auto', reason: 'Read-only screen capture' },
+  { pattern: 'computer.window.list', tier: 'auto', reason: 'Read-only window enumeration' },
 ];
 
 // ---------------------------------------------------------------------------
