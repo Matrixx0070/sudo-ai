@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 823,
+  "count": 824,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -137,6 +137,7 @@
     "SUDO_CAS_SURPRISE_GATE",
     "SUDO_CDP_ENDPOINT",
     "SUDO_CHANNEL_COMMANDS",
+    "SUDO_CHANNEL_OWNERS",
     "SUDO_CHAT_APPROVALS",
     "SUDO_CHEAP_MODEL",
     "SUDO_CHUNK_CONTRADICT",
