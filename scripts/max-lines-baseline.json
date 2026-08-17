@@ -154,7 +154,6 @@
   "src/core/tools/builtin/research/tools/learn-tools.ts": 411,
   "src/core/tools/builtin/research/tools/research-tools.ts": 449,
   "src/core/tools/builtin/social/youtube-tools.ts": 455,
-  "src/core/tools/builtin/system/shell-exec.ts": 468,
   "src/core/tools/builtin/textproc/capabilities.ts": 461,
   "src/core/tools/completion-verifier.ts": 579,
   "src/core/tools/mcp-adapter.ts": 1484,

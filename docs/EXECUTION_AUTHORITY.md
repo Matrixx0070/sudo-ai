@@ -105,6 +105,69 @@ admitted users are explicitly excluded from owner status.
 A god-mode pass logs at `warn` with the surface, action and command, so
 unlimited authority is always *recorded*, even though it is never *questioned*.
 
+### God mode bypasses the sandbox too — that is the point
+
+Lifting the approval layer alone was **not** god-level access. Measured live
+(2026-08-16): with god mode on, an owner command `touch /etc/sudo-ai-godmode-proof`
+returned success and the agent reported "full root access confirmed", but the
+file did not exist on the host — `system.exec` had run it inside the bwrap
+mount namespace. The owner had authority over a copy of the system, not the
+system.
+
+So under god mode a **verified-owner** turn bypasses the sandbox and executes
+on the real host. Every other caller keeps it:
+
+| caller | sandbox |
+|---|---|
+| verified owner, god mode on | **bypassed — real host** |
+| verified owner, god mode off | sandbox (opt-in, not the default) |
+| non-owner / unattributed | sandbox, always |
+
+Each bypass logs at `warn`: `GOD MODE: owner-verified command bypassing the
+sandbox — executing on the real host`.
+
+### What god mode costs — read this before enabling it
+
+Adversarial review (2026-08-16) named the real trade-off, and it is not a code
+defect but a consequence of the directive:
+
+**A prompt injection during a legitimate owner turn now reaches the host.**
+The turn is owner-attributed, but the CONTENT the model acts on — a fetched
+web page, an email, a repo file, tool output — may be attacker-controlled.
+Before god mode, injected instructions were contained by the sandbox and
+refused by the catastrophic list. Under god mode, on an owner turn, both
+layers are lifted. One successful injection is arbitrary host access.
+
+That is the price of "god-level access to the system it lives on", and it is
+why owner attribution is the only thing standing between the model and the
+machine. Consequences:
+
+- **Owner attribution must be exact.** Web chat previously marked EVERY turn
+  `isOwner: true` while skipping auth on loopback/LAN — behind a reverse proxy
+  that made any caller the owner. Now **admission and ownership are separate
+  questions**: loopback/LAN still admits, but owner status requires proving
+  `WEB_CHAT_TOKEN`.
+
+  The proof is bound **per connection and per request**, never cached on the
+  adapter. A first attempt did cache it, and review reproduced a tokenless
+  WebSocket inheriting owner status from the owner's previous HTTP request —
+  real-host root for an unauthenticated client. `tests/channels/web-owner-attribution.test.ts`
+  drives a real server and a real socket to pin every path (POST, WS,
+  attachments), because the earlier test pre-set the internal flag and passed
+  while both holes were open.
+- **Keep god mode off where owner attribution is weak** — any proxied or
+  non-loopback deployment without a real owner-id match.
+- `agent.command` driven by external Grok text (`SUDO_GROK_WEB_MCP_COMMAND=1`,
+  default off) runs owner-attributed: under god mode that is host-level. Leave
+  it off unless the input path is trusted.
+
+### Contained runs must say they are contained
+
+The same incident exposed a reporting defect: a sandboxed write was described
+as "Done — file written". Sandboxed results now carry an explicit note that
+changes outside the session workspace did not affect the host, so a contained
+effect can never be reported as a host effect.
+
 `SUDO_AUTHORITY_ALLOW_CATASTROPHIC=1` remains the unconditional lift for
 headless contexts the owner explicitly trusts (no attribution required).
 

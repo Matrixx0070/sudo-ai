@@ -6,18 +6,13 @@
  * Uses execFile(/bin/bash) so the shell handles pipes, redirects, builtins,
  * etc., while still going through execFile (not exec) for argument safety.
  *
- * EXEC_APPROVAL_MODE controls the approval gate:
- *   off       — no gate (logs startup warning)
- *   allowlist — allowlisted commands run immediately; others require approval (default)
- *   strict    — all commands require explicit approval
- *
- * EXEC_APPROVAL_WAIT_MS — how long (ms) the tool blocks waiting for a decision.
- *   Default: 60000 (60 seconds). If no decision arrives within this window,
- *   the tool returns a pending message with the approval ID so the agent can
- *   surface it to the operator for out-of-band approval.
+ * AUTHORITY: security/execution-authority.ts decides whether this tool may run
+ * without asking. Under the default autonomous mode nothing prompts and
+ * EXEC_APPROVAL_MODE / EXEC_APPROVAL_WAIT_MS apply only in gated mode. Under
+ * god mode a verified-owner command also bypasses the sandbox and runs on the
+ * real host. See docs/EXECUTION_AUTHORITY.md.
  */
 
-import { execFile } from 'node:child_process';
 import { createLogger } from '../../../shared/logger.js';
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import type { SandboxPolicy } from '../../../sandbox/sandbox-types.js';
@@ -27,9 +22,13 @@ import {
   waitForDecision,
   parseApprovalMode,
 } from '../../../security/approval/index.js';
-import { authorize } from '../../../security/execution-authority.js';
-import { runInSandbox } from '../../../sandbox/sandbox-runner.js';
-import { clampHeadTail } from '../../../shared/head-tail-buffer.js';
+import { authorize, isGodMode } from '../../../security/execution-authority.js';
+import {
+  MAX_OUTPUT,
+  truncate,
+  runShell,
+  runApprovedCommandSandboxed,
+} from './shell-exec-runner.js';
 import {
   checkRepoCommand,
   repoExecEnabled,
@@ -39,7 +38,6 @@ import {
 
 const logger = createLogger('system.exec');
 
-const MAX_OUTPUT = 8_000;
 const DEFAULT_TIMEOUT = 60_000;
 
 // ---------------------------------------------------------------------------
@@ -67,138 +65,6 @@ if (APPROVAL_MODE === 'off') {
 // ---------------------------------------------------------------------------
 // Helper: truncate combined output
 // ---------------------------------------------------------------------------
-
-function truncate(text: string): { text: string; truncated: boolean } {
-  if (text.length <= MAX_OUTPUT) return { text, truncated: false };
-  // Keep both ends: the head shows what the command started doing, the tail
-  // carries the error message and exit status — the part the model most needs
-  // to recover. Split the MAX_OUTPUT budget 50/50 across head and tail.
-  const half = Math.floor(MAX_OUTPUT / 2);
-  const { text: clamped, truncated } = clampHeadTail(text, {
-    headBudget: half,
-    tailBudget: MAX_OUTPUT - half,
-    elisionMarker: `...[truncated — ${text.length} total chars, {n} elided]...`,
-  });
-  return { text: clamped, truncated };
-}
-
-// ---------------------------------------------------------------------------
-// Helper: run /bin/bash -c <command>
-// ---------------------------------------------------------------------------
-
-function runShell(
-  command: string,
-  cwd: string,
-  timeoutMs: number,
-  signal?: AbortSignal,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      '/bin/bash',
-      ['-c', command],
-      {
-        cwd,
-        timeout: timeoutMs,
-        maxBuffer: 16 * 1024 * 1024,
-        env: process.env,
-        signal,
-      },
-      (err, stdout, stderr) => {
-        if (!err) {
-          resolve({ stdout, stderr, exitCode: 0 });
-          return;
-        }
-        const code =
-          typeof (err as NodeJS.ErrnoException & { code?: unknown })['code'] === 'number'
-            ? ((err as unknown as { code: number }).code)
-            : 1;
-        resolve({
-          stdout: typeof stdout === 'string' ? stdout : '',
-          stderr: typeof stderr === 'string' ? stderr : err.message,
-          exitCode: code,
-        });
-      },
-    );
-    if (signal) {
-      signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
-    }
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Helper: run command inside bwrap sandbox via sandbox-runner
-// ---------------------------------------------------------------------------
-
-/**
- * Run a shell command through the bubblewrap sandbox.
- *
- * Delegates to `runInSandbox` from sandbox-runner.ts (Builder A).
- * When SUDO_SANDBOX_DISABLE=1, sandbox-runner falls back to raw execFile
- * and emits a loud warning on every call.
- *
- * Note: inside the sandbox the effective cwd is always /workspace (enforced by
- * --chdir /workspace in the bwrap invocation), regardless of any `cwd` param
- * passed in by the agent.
- */
-async function runSandboxedShell(
-  command: string,
-  workspaceDir: string,
-  timeoutMs: number,
-  policy: SandboxPolicy,
-  signal?: AbortSignal,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return runInSandbox({
-    command,
-    workspaceDir,
-    policy,
-    timeoutMs,
-    signal,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Execute an already-approved command via sandbox
-// ---------------------------------------------------------------------------
-
-async function runApprovedCommandSandboxed(
-  command: string,
-  workspaceDir: string,
-  timeoutMs: number,
-  sessionId: string,
-  start: number,
-  policy: SandboxPolicy,
-  signal?: AbortSignal,
-): Promise<ToolResult> {
-  try {
-    const { stdout, stderr, exitCode } = await runSandboxedShell(
-      command,
-      workspaceDir,
-      timeoutMs,
-      policy,
-      signal,
-    );
-    const durationMs = Date.now() - start;
-
-    const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
-    const { text: output, truncated } = truncate(combined || '(no output)');
-    const success = exitCode === 0;
-
-    logger.info(
-      { session: sessionId, exitCode, durationMs, truncated, sandboxed: true },
-      'Sandboxed shell command completed',
-    );
-
-    return {
-      success,
-      output: success ? output : `Command exited with code ${exitCode}:\n${output}`,
-      data: { exitCode, durationMs, truncated, sandboxed: true },
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error({ session: sessionId, command, err: err instanceof Error ? err.message : String(err) }, 'Sandboxed shell command threw unexpectedly');
-    return { success: false, output: `system.exec sandbox error: ${msg}`, data: { exitCode: -1, sandboxed: true } };
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Helper: pending-approval ToolResult (returned to agent when no decision yet)
@@ -306,12 +172,23 @@ async function executeWithGate(opts: GateOptions): Promise<ToolResult> {
     (APPROVAL_MODE === 'strict' ||
       (APPROVAL_MODE === 'allowlist' && !isAllowlisted(command)));
 
+  // GOD MODE (owner directive): a VERIFIED-OWNER turn runs on the REAL HOST.
+  // Lifting the approval layer alone left owner commands inside the bwrap
+  // namespace — `touch /etc/x` reported success while the host was untouched.
+  // Owner only; every unattributed caller keeps the sandbox. See
+  // docs/EXECUTION_AUTHORITY.md.
+  const hostAccess = isGodMode() && ownerVerified === true;
+
   if (!needsApproval) {
-    logger.info({ session: sessionId, command, cwd, timeoutMs }, 'Executing shell command');
-    if (sandboxPolicy?.enabled) {
+    logger.info({ session: sessionId, command, cwd, timeoutMs, hostAccess }, 'Executing shell command');
+    if (sandboxPolicy?.enabled && !hostAccess) {
       const wsDir = workspaceDir;
       logger.info({ session: sessionId, wsDir }, 'Dispatching to bwrap sandbox');
       return runApprovedCommandSandboxed(command, wsDir, timeoutMs, sessionId, start, sandboxPolicy, signal);
+    }
+    if (hostAccess && sandboxPolicy?.enabled) {
+      logger.warn({ session: sessionId, command: command.slice(0, 200) },
+        'GOD MODE: owner-verified command bypassing the sandbox — executing on the real host');
     }
     return runApprovedCommand(command, cwd, timeoutMs, sessionId, start, signal);
   }
