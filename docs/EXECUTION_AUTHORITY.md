@@ -103,7 +103,19 @@ second half of the directive ("react only to the owner's command"):
 |---|---|---|
 | Telegram | sender id is in the constructor allowlist (`TELEGRAM_CHAT_ID`) | pairing-admitted peers are admitted but never owners |
 | Web chat | the request/connection proves `WEB_CHAT_TOKEN` | loopback/LAN admission is not ownership |
-| everything else (Discord, email, Slack, WhatsApp, Signal, Matrix, IRC, cron, webhooks, remote workers, MCP) | never | no owner stamp → `isOwner` undefined → treated as non-owner |
+| Gateway API (`/v1/chat/completions` — TUI, scripts, remote owner clients) | the request authenticates with `GATEWAY_TOKEN` / gateway secret | resolved by `authenticateHttp`, threaded into the turn |
+| Router channels (Discord, Slack, email, WhatsApp, Signal, Matrix, IRC) | sender id is in that channel's `owners:` list in `config/channels.json5` | resolved by the access policy, stamped by the router |
+| cron, webhooks, remote workers, MCP, self-build, eval | never | no owner stamp → treated as non-owner, sandbox + containment apply |
+
+**Owner directive (2026-08-17): god mode follows the OWNER, not the channel.**
+However Frank reaches sudo-ai — Telegram, web UI, the gateway API behind a TUI
+or script, or any configured channel — an authenticated owner turn gets the
+same unlimited authority. Adding a channel to that list is a matter of
+configuring its owner identity, not changing the authority code.
+
+At boot, when god mode is on, the daemon logs exactly which identities hold it
+(`GOD MODE ACTIVE — these identities can execute on the real host through
+sudo-ai`), so unlimited authority is never implicit.
 
 Fail-closed by construction: an adapter that does not explicitly stamp
 `isOwner` cannot grant god mode. Adding owner support to a new channel is a

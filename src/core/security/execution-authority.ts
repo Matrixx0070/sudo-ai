@@ -215,6 +215,38 @@ export function authorize(req: AuthorityRequest): AuthorityDecision {
 // ---------------------------------------------------------------------------
 
 /**
+ * Enumerate the identities that hold god mode, for boot disclosure.
+ *
+ * Unlimited authority should never be implicit: the owner must be able to see
+ * WHO can drive the machine through sudo-ai, in one line, at every start.
+ */
+export function describeOwnerIdentities(): {
+  telegram: string[];
+  webToken: boolean;
+  gatewayToken: boolean;
+  channelOwners: string[];
+} {
+  const telegram = (process.env['TELEGRAM_CHAT_ID'] ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const channelOwners: string[] = [];
+  try {
+    // channels.json5 `owners:` lists — read lazily and defensively; a config
+    // problem must never stop the daemon from booting.
+    const raw = process.env['SUDO_CHANNEL_OWNERS'] ?? '';
+    for (const entry of raw.split(',').map((s) => s.trim()).filter(Boolean)) channelOwners.push(entry);
+  } catch { /* disclosure is best-effort */ }
+
+  return {
+    telegram,
+    webToken: (process.env['WEB_CHAT_TOKEN'] ?? '').length > 0,
+    gatewayToken: (process.env['GATEWAY_TOKEN'] ?? '').length > 0,
+    channelOwners,
+  };
+}
+
+/**
  * Log the resolved posture once at boot so the operating mode is never a
  * mystery in the logs. Called from the CLI bootstrap.
  */
@@ -233,6 +265,17 @@ export function logAuthorityPosture(): void {
       },
       'Execution authority: AUTONOMOUS — full root-level authority, no approval prompts',
     );
+    if (isGodMode()) {
+      const who = describeOwnerIdentities();
+      log.warn(
+        {
+          telegramOwners: who.telegram,
+          webChatToken: who.webToken ? 'configured' : 'NOT set (web chat cannot be owner)',
+          gatewayToken: who.gatewayToken ? 'configured' : 'NOT set (API cannot be owner)',
+        },
+        'GOD MODE ACTIVE — these identities can execute on the real host through sudo-ai',
+      );
+    }
   } else {
     log.warn({ mode }, 'Execution authority: GATED — surfaces will prompt for confirmation');
   }

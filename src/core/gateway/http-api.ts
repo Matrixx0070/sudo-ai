@@ -60,7 +60,12 @@ const MAX_BODY      = 256 * 1024;    // 256 KB body cap
 // ---------------------------------------------------------------------------
 
 interface AgentLoopLike {
-  run(sessionId: string, message: string): Promise<{ text: string; attachments: unknown[] }>;
+  run(
+    sessionId: string,
+    message: string,
+    onEvent?: unknown,
+    opts?: { caller?: { isOwner: boolean; channel: string; peerId: string } },
+  ): Promise<{ text: string; attachments: unknown[] }>;
 }
 
 interface SessionManagerLike {
@@ -368,7 +373,19 @@ function handleModels(res: ServerResponse): void {
   sendJson(res, 200, { object: 'list', data: [{ id: MODEL_ID, object: 'model', created: MODEL_CREATED, owned_by: 'sudo-ai' }] });
 }
 
-export async function handleChatCompletions(req: IncomingMessage, res: ServerResponse, deps: HttpApiDeps): Promise<void> {
+export async function handleChatCompletions(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: HttpApiDeps,
+  /**
+   * True when the caller authenticated as the OWNER (gateway token/secret —
+   * see gateway/auth.ts). The gate above already resolved this and used to
+   * throw it away, so every API turn ran unattributed: any client driving
+   * sudo-ai through this surface (TUI, scripts, remote owner clients) was
+   * denied owner-gated behaviour and god mode. Defaults false — fail closed.
+   */
+  isOwner = false,
+): Promise<void> {
   // Parse + validate body
   let raw: ChatRequest;
   let bodyStr = '';
@@ -419,7 +436,9 @@ export async function handleChatCompletions(req: IncomingMessage, res: ServerRes
   // Run agent
   let agentText: string;
   try {
-    agentText = (await deps.agentLoop.run(sessionId, userMsg)).text;
+    agentText = (await deps.agentLoop.run(sessionId, userMsg, undefined, {
+      caller: { isOwner, channel: 'http', peerId },
+    })).text;
   } catch (err: unknown) {
     log.error({ err: err instanceof Error ? err.message : String(err), sessionId }, 'agentLoop.run failed');
     sendError(res, 500, 'Internal server error'); return;
@@ -582,12 +601,13 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
         return;
       }
 
-      if (!authenticateHttp(req).ok) { sendError(res, 401, 'Unauthorized: invalid or missing bearer token'); return; }
+      const gatewayAuth = authenticateHttp(req);
+      if (!gatewayAuth.ok) { sendError(res, 401, 'Unauthorized: invalid or missing bearer token'); return; }
 
       if (method === 'GET' && pathname === '/v1/models') { handleModels(res); return; }
 
       if (method === 'POST' && pathname === '/v1/chat/completions') {
-        handleChatCompletions(req, res, deps).catch((err: unknown) => {
+        handleChatCompletions(req, res, deps, gatewayAuth.isOwner === true).catch((err: unknown) => {
           log.error({ err: err instanceof Error ? err.message : String(err) }, 'Unhandled error in handleChatCompletions');
           if (!res.headersSent) sendError(res, 500, 'Internal server error');
         });
