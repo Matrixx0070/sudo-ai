@@ -226,6 +226,28 @@ describe('createStatusPinController', () => {
     ctl.stop();
   });
 
+  it('ACTIVE work → fast cadence: the card refreshes every few seconds and the elapsed ticks', async () => {
+    vi.useFakeTimers();
+    // A run is active with a known start time, so the working line carries an elapsed.
+    const f = makeFake(dir, {
+      collect: async () => ({
+        activity: { activeCount: 1, oldestKey: 'telegram:1', oldestStartedAtMs: NOW },
+        cron: { enabledCount: 1, failingCount: 0 },
+        spend: { todayUsd: 0, budgetUsd: null },
+      }),
+    });
+    const ctl = createStatusPinController({ ...f.deps, activeIntervalMs: 5_000, activeMinGapMs: 4_000, intervalMs: 60_000, minGapMs: 15_000 });
+    await ctl.start(); // first send; buildCard marks the controller active
+    // Advance ~20s of active work at the 5s cadence.
+    for (let i = 0; i < 4; i++) { f.clock.t += 5_000; await vi.advanceTimersByTimeAsync(5_000); }
+    // Idle cadence (60s) would have produced ZERO edits in 20s; active produced several.
+    expect(f.edits.length).toBeGreaterThanOrEqual(3);
+    // …and the elapsed actually changed between refreshes (real-time, not frozen).
+    expect(f.edits[0]?.text).not.toBe(f.edits[1]?.text);
+    expect(f.edits.at(-1)?.text).toMatch(/working/i);
+    ctl.stop();
+  });
+
   it('recordHealthAlert: incident + count land on the card', async () => {
     vi.useFakeTimers();
     const f = makeFake(dir);

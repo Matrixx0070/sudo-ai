@@ -79,6 +79,7 @@ export function getCronManager(): unknown { return _cronManager; }
 export function getChannelRouter(): unknown { return _channelRouter; }
 /** Returns the injected memory engine, or null if not yet set. */
 export function getMemoryEngine(): unknown { return _memoryEngine; }
+import { statusTool } from './status.js';
 import { taskManagerTool } from './task-manager.js';
 import { youtubeFeedbackTool } from './youtube-feedback.js';
 import { memoryQueryTool } from './memory-query.js';
@@ -621,6 +622,7 @@ const workflowRecorderTool: ToolDefinition = {
 // ---------------------------------------------------------------------------
 
 const META_TOOLS: ToolDefinition[] = [
+  statusTool,
   skillCreatorTool,
   autonomousModeTool,
   workflowRecorderTool,

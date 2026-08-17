@@ -281,10 +281,14 @@ export interface StatusPinDeps {
   pin(chatId: string, messageId: string | number): Promise<void>;
   /** Gather everything except health (controller owns health state). */
   collect(): Promise<Omit<StatusPinSnapshot, 'nowMs' | 'health'>>;
-  /** Cadence between unconditional refreshes. Default 60s. */
+  /** Idle cadence between unconditional refreshes. Default 60s. */
   intervalMs?: number;
-  /** Minimum gap between two edits. Default 15s. */
+  /** Fast cadence WHILE a run is active, so the elapsed ticks. Default 5s. */
+  activeIntervalMs?: number;
+  /** Minimum gap between two edits while idle. Default 15s. */
   minGapMs?: number;
+  /** Minimum gap between two edits while active. Default 4s. */
+  activeMinGapMs?: number;
   now?: () => number;
 }
 
@@ -305,22 +309,29 @@ export interface StatusPinController {
 }
 
 export function createStatusPinController(deps: StatusPinDeps): StatusPinController {
-  const intervalMs = deps.intervalMs ?? 60_000;
-  const minGapMs = deps.minGapMs ?? 15_000;
+  const idleIntervalMs = deps.intervalMs ?? 60_000;
+  const activeIntervalMs = deps.activeIntervalMs ?? 5_000;
+  const idleMinGapMs = deps.minGapMs ?? 15_000;
+  const activeMinGapMs = deps.activeMinGapMs ?? 4_000;
   const now = deps.now ?? Date.now;
-  const throttle = createMinGapThrottle(minGapMs, now);
 
   let messageId: string | number | null = null;
-  let ticker: ReturnType<typeof setInterval> | null = null;
+  let ticker: ReturnType<typeof setTimeout> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let refreshing = false;
   let dirty = false;
   let stopped = false;
   let lastIncident: StatusPinHealthIncident | undefined;
   let foldedCount = 0;
+  let lastEditAtMs = 0;
+  // Whether the last snapshot had active work. Drives the fast refresh cadence
+  // so "🔶 working · Ns" ticks live and 🟢 idle↔working flips promptly instead of
+  // being frozen until the next 60 s tick.
+  let active = false;
 
   async function buildCard(): Promise<string> {
     const base = await deps.collect();
+    active = (base.activity?.activeCount ?? 0) > 0;
     const snapshot: StatusPinSnapshot = {
       ...base,
       nowMs: now(),
@@ -329,18 +340,24 @@ export function createStatusPinController(deps: StatusPinDeps): StatusPinControl
     return renderStatusPinCard(snapshot);
   }
 
-  /** One best-effort edit, gated by the min-gap throttle. */
+  /** Current min-gap — tighter while working so the elapsed can tick. */
+  function minGap(): number {
+    return active ? activeMinGapMs : idleMinGapMs;
+  }
+
+  /** One best-effort edit, gated by the (activity-aware) min-gap. */
   async function refresh(): Promise<void> {
     if (stopped || messageId === null) return;
     if (refreshing) { dirty = true; return; }
-    if (!throttle.tryAcquire()) {
+    const since = now() - lastEditAtMs;
+    if (since < minGap()) {
       // Coalesce: retry once when the gap elapses.
       dirty = true;
       if (retryTimer === null) {
         retryTimer = setTimeout(() => {
           retryTimer = null;
           if (dirty) void refresh();
-        }, throttle.msUntilReady() + 50);
+        }, (minGap() - since) + 50);
         if (typeof retryTimer.unref === 'function') retryTimer.unref();
       }
       return;
@@ -349,12 +366,24 @@ export function createStatusPinController(deps: StatusPinDeps): StatusPinControl
     dirty = false;
     try {
       await deps.edit(deps.chatId, messageId, await buildCard());
+      lastEditAtMs = now();
     } catch (err) {
       log.debug({ err: String(err) }, 'status-pin: edit failed — degrading silently');
     } finally {
       refreshing = false;
     }
     if (dirty && !stopped) void refresh(); // coalesced update that arrived mid-edit
+  }
+
+  /** Self-adjusting cadence: fast (activeIntervalMs) while working, calm otherwise. */
+  function scheduleTick(): void {
+    if (stopped) return;
+    if (ticker !== null) clearTimeout(ticker);
+    ticker = setTimeout(() => {
+      ticker = null;
+      void refresh().finally(scheduleTick);
+    }, active ? activeIntervalMs : idleIntervalMs);
+    if (typeof ticker.unref === 'function') ticker.unref();
   }
 
   return {
@@ -374,8 +403,7 @@ export function createStatusPinController(deps: StatusPinDeps): StatusPinControl
           try { await deps.pin(deps.chatId, messageId); }
           catch (err) { log.debug({ err: String(err) }, 'status-pin: pin failed — card stays unpinned'); }
         }
-        ticker = setInterval(() => { void refresh(); }, intervalMs);
-        if (typeof ticker.unref === 'function') ticker.unref();
+        scheduleTick();
         log.info({ chatId: deps.chatId, messageId }, 'status-pin: live card started');
       } catch (err) {
         log.warn({ err: String(err) }, 'status-pin: start failed — running without pinned card');
@@ -384,7 +412,7 @@ export function createStatusPinController(deps: StatusPinDeps): StatusPinControl
 
     stop(): void {
       stopped = true;
-      if (ticker !== null) { clearInterval(ticker); ticker = null; }
+      if (ticker !== null) { clearTimeout(ticker); ticker = null; }
       if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
     },
 
