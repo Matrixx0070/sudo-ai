@@ -24,7 +24,7 @@ import { requestMissionWake } from '../agent/mission/wake.js';
 import { getRunRegistry } from '../agent/run-registry.js';
 import { getRunLanes, type RunLane } from '../agent/run-lanes.js';
 import { getSteerBuffer } from '../agent/steer-buffer.js';
-import { getQueueModeStore, decideQueueMode, ownerInterruptsEnabled } from './queue-modes.js';
+import { getQueueModeStore, decideQueueMode, ownerInterruptsEnabled, interruptAckEnabled, INTERRUPT_ACK_TEXT } from './queue-modes.js';
 import type { MessageHandler, UnifiedMessage } from './types.js';
 import type { JournalEvent } from '../sessions/journal-types.js';
 import type { AgentEvent } from '../agent/types.js';
@@ -265,6 +265,11 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
         if (decision.action === 'interrupt' && active.abort) {
           active.abort('interrupted by a newer owner message');
           log.info({ channel: msg.channel, peerId: msg.peerId }, 'GW-5: owner message INTERRUPTED the active run — aborting and running the new message');
+          // Immediately acknowledge the interrupt so the owner sees the loop was
+          // stopped, not just silently aborted.
+          if (interruptAckEnabled()) {
+            void deps.send(msg, INTERRUPT_ACK_TEXT).catch(() => { /* best effort */ });
+          }
           // fall through to enqueue the replacement turn.
         }
         // followup / collect / normal → fall through to the normal enqueue path.

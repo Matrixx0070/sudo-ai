@@ -64,6 +64,17 @@ export function ownerInterruptsEnabled(env: NodeJS.ProcessEnv = process.env): bo
   return env['SUDO_OWNER_INTERRUPTS'] !== '0';
 }
 
+/**
+ * When an owner message interrupts a running loop, immediately send this short
+ * acknowledgement so the owner SEES the loop was interrupted (rather than the
+ * bot silently aborting and only replying to the new message later). On by
+ * default; set SUDO_OWNER_INTERRUPT_ACK=0 to suppress the ack.
+ */
+export const INTERRUPT_ACK_TEXT = '⏸️ Interrupting the current task to handle your new message…';
+export function interruptAckEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['SUDO_OWNER_INTERRUPT_ACK'] !== '0';
+}
+
 export interface QueueModeDecisionInput {
   /** The configured mode for this session (already resolved from overrides). */
   mode: QueueMode;

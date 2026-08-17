@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 827,
+  "count": 828,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -539,6 +539,7 @@
     "SUDO_OUTCOME_ADAPTERS_DISABLE",
     "SUDO_OUTCOME_GATING",
     "SUDO_OWNER_INTERRUPTS",
+    "SUDO_OWNER_INTERRUPT_ACK",
     "SUDO_PARALLEL_TOOLS_DISABLE",
     "SUDO_PERSIST_EPHEMERAL",
     "SUDO_PLAN_MODE",

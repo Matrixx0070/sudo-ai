@@ -67,7 +67,7 @@ import { TelegramAdapter } from './core/channels/telegram.js';
 import { getRunRegistry } from './core/agent/run-registry.js';
 import { getRunLanes } from './core/agent/run-lanes.js';
 import { getSteerBuffer } from './core/agent/steer-buffer.js';
-import { getQueueModeStore, decideQueueMode, ownerInterruptsEnabled } from './core/channels/queue-modes.js';
+import { getQueueModeStore, decideQueueMode, ownerInterruptsEnabled, interruptAckEnabled, INTERRUPT_ACK_TEXT } from './core/channels/queue-modes.js';
 import { makeStopKeyboard, renderStoppedCard, buildRegenInstruction } from './core/channels/telegram-run-controls.js';
 import { registerOutboundAdapter, sendToChannelOutbox, registeredOutboundChannels } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
@@ -2804,6 +2804,14 @@ ${question}`, kb);
           if (decision.action === 'interrupt' && active.abort) {
             active.abort('interrupted by a newer owner message');
             log.info({ peerId: msg.peerId }, 'TX1/GW-5: owner message INTERRUPTED the active run — aborting and running the new message');
+            // Immediately acknowledge the interrupt so the owner SEES the loop
+            // was stopped, instead of the bot silently aborting and only
+            // answering the new message later.
+            if (interruptAckEnabled()) {
+              const ackTarget = msg.chatId ?? msg.peerId;
+              telegram.send(ackTarget, INTERRUPT_ACK_TEXT).catch((e: unknown) =>
+                log.warn({ err: String(e), peerId: msg.peerId }, 'interrupt ack send failed'));
+            }
             // fall through — the replacement turn queues behind the aborting run.
           }
           // followup / collect → fall through to the normal coalescer/queue path.

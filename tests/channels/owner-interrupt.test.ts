@@ -11,7 +11,7 @@ import type { UnifiedMessage } from '../../src/core/channels/types.js';
 import { KeyedAsyncQueue } from '../../src/core/sessions/queue.js';
 import { __resetRunRegistryForTest } from '../../src/core/agent/run-registry.js';
 import { __resetSteerBufferForTest, getSteerBuffer } from '../../src/core/agent/steer-buffer.js';
-import { __resetQueueModeStoreForTest } from '../../src/core/channels/queue-modes.js';
+import { __resetQueueModeStoreForTest, INTERRUPT_ACK_TEXT } from '../../src/core/channels/queue-modes.js';
 
 const tick = (ms = 15): Promise<void> => new Promise((r) => setTimeout(r, ms));
 function ownerMsg(text: string): UnifiedMessage {
@@ -83,8 +83,24 @@ describe('owner-interrupt', () => {
     // …and the new owner message ran and was answered (not steered/buffered).
     expect(h.runTexts).toContain('stop and take a screenshot');
     expect(h.sent).toContain('answer:stop and take a screenshot');
+    // The owner immediately got an interrupt acknowledgement, before the answer.
+    expect(h.sent).toContain(INTERRUPT_ACK_TEXT);
+    expect(h.sent.indexOf(INTERRUPT_ACK_TEXT)).toBeLessThan(h.sent.indexOf('answer:stop and take a screenshot'));
     // It did NOT go into the steer buffer.
     expect(getSteerBuffer().size(SESSION_ID)).toBe(0);
+  });
+
+  it('SUDO_OWNER_INTERRUPT_ACK=0 suppresses the ack but still interrupts', async () => {
+    process.env['SUDO_OWNER_INTERRUPT_ACK'] = '0';
+    const h = harness();
+    const p1 = h.handler(ownerMsg('long task'));
+    await tick();
+    const p2 = h.handler(ownerMsg('reply now'));
+    await Promise.all([p1, p2]);
+    await tick(30);
+    expect(h.aborts.length).toBe(1); // still interrupted
+    expect(h.sent).not.toContain(INTERRUPT_ACK_TEXT); // but no ack
+    delete process.env['SUDO_OWNER_INTERRUPT_ACK'];
   });
 
   it('an UNTRUSTED message does NOT interrupt an owner run (steer tier guard → followup)', async () => {
