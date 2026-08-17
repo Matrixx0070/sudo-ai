@@ -77,6 +77,13 @@ export interface BufferedEditSinkOptions {
    * sink the timings came from. Default 'sink'.
    */
   label?: string;
+  /**
+   * Streaming cursor glyph appended to the LIVE content during intermediate
+   * edits (the ChatGPT/Mira "typing" feel) and dropped on finalize. It rides the
+   * growing text — no extra edits, so no rate-limit cost. '' disables it.
+   * Only appears on content edits, never on the status card or placeholder.
+   */
+  cursor?: string;
 }
 
 export interface StreamSink {
@@ -125,6 +132,18 @@ export interface StreamSink {
  * `open()` is awaited synchronously inside this factory before any chunks
  * can be processed; if it rejects, the returned sink is a NOOP that logs.
  */
+/**
+ * Extract Telegram's requested back-off (ms) from a failed edit. grammy raises a
+ * GrammyError carrying `parameters.retry_after` (seconds) on a 429; other clients
+ * put "retry after N" in the message. Returns 0 when it isn't a rate-limit error.
+ */
+function retryAfterMs(err: unknown): number {
+  const p = (err as { parameters?: { retry_after?: number }; error_code?: number } | null)?.parameters;
+  if (p && typeof p.retry_after === 'number' && p.retry_after > 0) return Math.min(p.retry_after, 60) * 1000;
+  const m = /retry[_ ]after[:= ]+(\d+)/i.exec(String((err as { message?: string } | null)?.message ?? err ?? ''));
+  return m ? Math.min(parseInt(m[1]!, 10), 60) * 1000 : 0;
+}
+
 export async function createBufferedEditSink(
   open: OpenFn,
   edit: EditFn,
@@ -134,6 +153,7 @@ export async function createBufferedEditSink(
   const placeholder = options.placeholder ?? '…';
   const maxChars = options.maxChars ?? 8000;
   const label = options.label ?? 'sink';
+  const cursor = options.cursor ?? '';
 
   let messageId: string | number | null = null;
   try {
@@ -162,7 +182,13 @@ export async function createBufferedEditSink(
     if (inFlight) return; // serialise edits
     if (messageId === null) return;
 
-    const text = clampForChannel(buffer || statusText || placeholder);
+    // Live content gets the streaming cursor appended (it rides the growing
+    // text). The status card / placeholder never do. Clamp the body first so
+    // the cursor is never the thing that gets truncated.
+    const hasContent = buffer.length > 0;
+    const text = hasContent && cursor
+      ? clampForChannel(buffer) + cursor
+      : clampForChannel(buffer || statusText || placeholder);
     if (text === lastEditedText) return; // noop suppression
 
     const targetText = text;
@@ -178,8 +204,13 @@ export async function createBufferedEditSink(
         // next retry still respects the debounce window — without this
         // a 429 from Telegram triggers an immediate aggressive re-edit
         // and cascading rate limits (verifier HIGH #4).
-        log.warn({ err: String(err), label }, 'edit() failed — continuing');
-        lastEditAt = Date.now();
+        //
+        // Adaptive 429 backoff (Mira-benchmark): when Telegram returns a
+        // retry_after, push the next edit past THAT window (not just the
+        // 800 ms floor) so a hot chat quietly widens its own cadence.
+        const retryMs = retryAfterMs(err);
+        log.warn({ err: String(err), label, retryMs: retryMs || undefined }, 'edit() failed — continuing');
+        lastEditAt = retryMs > intervalMs ? Date.now() + (retryMs - intervalMs) : Date.now();
       } finally {
         inFlight = null;
       }

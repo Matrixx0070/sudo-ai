@@ -2230,7 +2230,16 @@ ${question}`, kb);
                 // and Telegram's 4096-char editMessageText cap agree on the
                 // wire body — preventing duplicate edits whose only delta
                 // is past Telegram's truncation point (verifier HIGH #3).
-                { intervalMs: 800, maxChars: 4080, placeholder: '…', label: `telegram:${msg.peerId}` },
+                // Streaming cursor ▌ (ChatGPT/Mira feel): rides the live content,
+                // dropped on finalize. SUDO_TG_STREAM_CURSOR='0' disables it; any
+                // other value overrides the glyph. Default on.
+                {
+                  intervalMs: 800,
+                  maxChars: 4080,
+                  placeholder: '…',
+                  label: `telegram:${msg.peerId}`,
+                  cursor: process.env['SUDO_TG_STREAM_CURSOR'] === '0' ? '' : (process.env['SUDO_TG_STREAM_CURSOR'] || '▌'),
+                },
               );
               // TX1+TX3 unified keyboard: one row carrying whichever of ⏹ Stop
               // and the detail toggle are enabled. Rebuilt whenever detail

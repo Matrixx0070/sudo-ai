@@ -109,7 +109,57 @@ describe('chunk debounce + finalize', () => {
     expect(t.edits[0]?.text).toBe('Final canonical text');
   });
 
+  it('appends the streaming cursor to live content, then drops it on finalize', async () => {
+    const t = fakeTransport();
+    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100, cursor: '▌' });
+    sink.chunk('Hello world');
+    await vi.advanceTimersByTimeAsync(150);
+    // The live edit carries the cursor riding the text…
+    expect(t.edits.at(-1)?.text).toBe('Hello world▌');
+    vi.useRealTimers();
+    // …and the finalized message is clean (no cursor).
+    await sink.finalize('Hello world');
+    expect(t.edits.at(-1)?.text).toBe('Hello world');
+  });
+
+  it('does not put the cursor on the status card (only on content)', async () => {
+    const t = fakeTransport();
+    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100, cursor: '▌' });
+    sink.status('💭 **Thinking** · 2s');
+    await vi.advanceTimersByTimeAsync(150);
+    expect(t.edits.at(-1)?.text).toBe('💭 **Thinking** · 2s'); // no cursor on status
+  });
+});
+
+describe('adaptive 429 backoff', () => {
+  it('honors Telegram retry_after by widening the next edit window', async () => {
+    // First edit 429s with retry_after: 3s; the sink must not re-edit until then.
+    let calls = 0;
+    const seen: string[] = [];
+    const err = Object.assign(new Error('Too Many Requests: retry after 3'), { parameters: { retry_after: 3 } });
+    const edit = async (_id: string | number, text: string) => {
+      calls++;
+      if (calls === 1) throw err; // first edit rate-limited
+      seen.push(text);
+    };
+    const open = async () => 'm1';
+    vi.useFakeTimers();
+    const sink = await createBufferedEditSink(open, edit, { intervalMs: 100 });
+    sink.chunk('A');
+    await vi.advanceTimersByTimeAsync(150); // first edit fires → 429
+    sink.chunk('B');
+    await vi.advanceTimersByTimeAsync(500); // well past the 100ms floor but < 3s
+    expect(seen).toEqual([]); // still backing off — no second edit yet
+    await vi.advanceTimersByTimeAsync(3000); // past retry_after
+    // (a further chunk re-triggers scheduling after the backoff window)
+    sink.chunk('C');
+    await vi.advanceTimersByTimeAsync(200);
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    vi.useRealTimers();
+  });
+
   it('finalize is a no-op when the final text matches the last edit', async () => {
+    vi.useFakeTimers();
     const t = fakeTransport();
     const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100 });
     sink.chunk('Hello');
