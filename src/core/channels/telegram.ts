@@ -1465,6 +1465,11 @@ export class TelegramAdapter implements ChannelAdapter {
       peerName: [from?.first_name, from?.last_name].filter(Boolean).join(' ') || from?.username || userId,
       chatType,
       text: safeText,
+      // Owner attribution for the agent loop (god mode + owner-only policy
+      // read this). Sourced from the constructor allowlist — pairing-admitted
+      // users are deliberately NOT owners. Without it every Telegram turn,
+      // including the owner's own DMs, was unattributed.
+      isOwner: this.ownerUsers.has(userId),
       media: media.length > 0 ? media : undefined,
       replyToId: ctx.message?.reply_to_message?.message_id != null
         ? String(ctx.message.reply_to_message.message_id)

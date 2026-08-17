@@ -2397,7 +2397,15 @@ ${question}`, kb);
           }
           let result: Awaited<ReturnType<typeof finalAgentLoop.run>>;
           try {
-            result = await finalAgentLoop.run(String(session.id), msg.text ?? '', onEvent, { race: true });
+            // Bind owner attribution to the turn. Channel adapters authenticate
+            // the peer and stamp `msg.isOwner`; without this the shared channel
+            // path ran EVERY turn unattributed — including the owner's own
+            // Telegram DMs — so god mode never applied to the one caller it
+            // exists for (found live 2026-08-17).
+            result = await finalAgentLoop.run(String(session.id), msg.text ?? '', onEvent, {
+              race: true,
+              caller: { isOwner: msg.isOwner === true, channel: msg.channel, peerId: msg.peerId },
+            });
           } finally {
             stopStatusTicker?.();
             // TX1: the run is over — final edits (reply text / stopped card)
