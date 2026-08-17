@@ -52,6 +52,18 @@ export function globalDefaultMode(env: NodeJS.ProcessEnv = process.env): QueueMo
   return isQueueMode(raw) ? raw : 'followup';
 }
 
+/**
+ * Owner-interrupt (owner directive 2026-08-17): the OWNER's newest message
+ * preempts a running loop immediately (abort + restart) instead of being steered
+ * into it or queued behind it — so a long autonomous loop never buries the
+ * owner's current instruction. On by default; set SUDO_OWNER_INTERRUPTS=0 to
+ * restore the per-session queue-mode behaviour for owner messages too. Only the
+ * OWNER tier may interrupt — an untrusted message can never abort an owner's run.
+ */
+export function ownerInterruptsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['SUDO_OWNER_INTERRUPTS'] !== '0';
+}
+
 export interface QueueModeDecisionInput {
   /** The configured mode for this session (already resolved from overrides). */
   mode: QueueMode;
@@ -65,6 +77,12 @@ export interface QueueModeDecisionInput {
   runTier: SteerTier;
   /** Trust tier of the incoming message. */
   msgTier: SteerTier;
+  /**
+   * When true, an OWNER-tier message interrupts the active run (abort + restart)
+   * regardless of the configured mode. Computed by the caller from
+   * {@link ownerInterruptsEnabled}. Never lets an untrusted message interrupt.
+   */
+  ownerInterrupts?: boolean;
 }
 
 export type QueueModeDecision =
@@ -88,6 +106,13 @@ export function decideQueueMode(input: QueueModeDecisionInput): QueueModeDecisio
 
   // Media never steers — keep the attachment attached to its own turn.
   if (input.isMedia) return { action: 'followup' };
+
+  // Owner-interrupt: the owner's newest message preempts any running loop
+  // immediately. Only the owner tier may interrupt (an untrusted message never
+  // aborts an owner's run). Takes precedence over the configured queue mode.
+  if (input.ownerInterrupts && input.msgTier === 'owner') {
+    return { action: 'interrupt' };
+  }
 
   switch (input.mode) {
     case 'interrupt':

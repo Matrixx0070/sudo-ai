@@ -24,7 +24,7 @@ import { requestMissionWake } from '../agent/mission/wake.js';
 import { getRunRegistry } from '../agent/run-registry.js';
 import { getRunLanes, type RunLane } from '../agent/run-lanes.js';
 import { getSteerBuffer } from '../agent/steer-buffer.js';
-import { getQueueModeStore, decideQueueMode } from './queue-modes.js';
+import { getQueueModeStore, decideQueueMode, ownerInterruptsEnabled } from './queue-modes.js';
 import type { MessageHandler, UnifiedMessage } from './types.js';
 import type { JournalEvent } from '../sessions/journal-types.js';
 import type { AgentEvent } from '../agent/types.js';
@@ -62,6 +62,13 @@ export interface GatewayTurnDeps {
   journal?: boolean;
   /** Reply text on turn failure. */
   errorText?: string;
+  /**
+   * Abort the active run for a session (owner-interrupt). Wired to the shared
+   * steering channel by the caller; the loop honours it at its next iteration
+   * boundary. When absent, an owner-interrupt decision degrades to queueing the
+   * new turn behind the current run (still processed, just not preempted).
+   */
+  abortRun?: (sessionId: string, reason: string) => void;
 }
 
 const DEFAULT_ERROR = 'Something went wrong. Please try again.';
@@ -130,6 +137,10 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
         key: convKey,
         sessionId: String(session.id),
         tier: msg.isOwner === true ? 'owner' : 'untrusted',
+        // Owner-interrupt seam: signals the shared steering channel; the loop
+        // aborts at its next iteration boundary. Absent → interrupt degrades to
+        // a queued follow-up turn.
+        ...(deps.abortRun ? { abort: (reason: string) => deps.abortRun!(String(session.id), reason) } : {}),
       });
       // GW-11: acquire a global run-lane slot (opt-in SUDO_RUN_LANES_ENABLED=1).
       // Channel turns run in the 'user' lane (default cap 4). The user lane never
@@ -241,6 +252,7 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
           isCommand: false,
           runTier: active.tier,
           msgTier: msg.isOwner === true ? 'owner' : 'untrusted',
+          ownerInterrupts: ownerInterruptsEnabled(),
         });
         if (decision.action === 'steer') {
           getSteerBuffer().push(active.sessionId, msg.text ?? '', decision.tier);
@@ -251,7 +263,8 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
           return;
         }
         if (decision.action === 'interrupt' && active.abort) {
-          active.abort('interrupted by a newer message');
+          active.abort('interrupted by a newer owner message');
+          log.info({ channel: msg.channel, peerId: msg.peerId }, 'GW-5: owner message INTERRUPTED the active run — aborting and running the new message');
           // fall through to enqueue the replacement turn.
         }
         // followup / collect / normal → fall through to the normal enqueue path.

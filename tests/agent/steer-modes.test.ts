@@ -12,6 +12,7 @@ import { SteerBuffer, minTier, COALESCE_MAX_CHARS } from '../../src/core/agent/s
 import {
   decideQueueMode,
   globalDefaultMode,
+  ownerInterruptsEnabled,
   QueueModeStore,
 } from '../../src/core/channels/queue-modes.js';
 
@@ -129,6 +130,37 @@ describe('GW-5 decideQueueMode', () => {
     expect(decideQueueMode({ ...base, mode: 'interrupt' }).action).toBe('interrupt');
     expect(decideQueueMode({ ...base, mode: 'collect' }).action).toBe('collect');
     expect(decideQueueMode({ ...base, mode: 'followup' }).action).toBe('followup');
+  });
+
+  it('OWNER-INTERRUPT: an owner message preempts the run regardless of mode', () => {
+    for (const mode of ['steer', 'followup', 'collect'] as const) {
+      const d = decideQueueMode({ ...base, mode, msgTier: 'owner', ownerInterrupts: true });
+      expect(d.action).toBe('interrupt');
+    }
+  });
+
+  it('OWNER-INTERRUPT: an UNTRUSTED message never interrupts (falls back to normal mode handling)', () => {
+    // untrusted + steer mode + owner run → tier guard reroutes to followup, NOT interrupt.
+    const d = decideQueueMode({ ...base, mode: 'steer', runTier: 'owner', msgTier: 'untrusted', ownerInterrupts: true });
+    expect(d.action).toBe('followup');
+  });
+
+  it('OWNER-INTERRUPT: disabled → owner message follows the configured mode (steer)', () => {
+    const d = decideQueueMode({ ...base, mode: 'steer', msgTier: 'owner', ownerInterrupts: false });
+    expect(d.action).toBe('steer');
+  });
+
+  it('OWNER-INTERRUPT: media from owner still never steers/interrupts (followup)', () => {
+    const d = decideQueueMode({ ...base, isMedia: true, msgTier: 'owner', ownerInterrupts: true });
+    expect(d.action).toBe('followup');
+  });
+});
+
+describe('ownerInterruptsEnabled flag', () => {
+  it('defaults ON; only SUDO_OWNER_INTERRUPTS=0 disables', () => {
+    expect(ownerInterruptsEnabled({})).toBe(true);
+    expect(ownerInterruptsEnabled({ SUDO_OWNER_INTERRUPTS: '1' })).toBe(true);
+    expect(ownerInterruptsEnabled({ SUDO_OWNER_INTERRUPTS: '0' })).toBe(false);
   });
 });
 

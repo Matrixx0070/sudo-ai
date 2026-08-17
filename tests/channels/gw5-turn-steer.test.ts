@@ -55,10 +55,15 @@ beforeEach(() => {
   __resetQueueModeStoreForTest();
   process.env['SUDO_MIDRUN_STEER'] = '1';
   process.env['SUDO_QUEUE_MODE_DEFAULT'] = 'steer';
+  // Isolate the STEER mechanism: owner-interrupt (default ON) would otherwise
+  // preempt an owner's mid-run message before it can be steered. Owner-interrupt
+  // has its own coverage in owner-interrupt.test.ts.
+  process.env['SUDO_OWNER_INTERRUPTS'] = '0';
 });
 afterEach(() => {
   delete process.env['SUDO_MIDRUN_STEER'];
   delete process.env['SUDO_QUEUE_MODE_DEFAULT'];
+  delete process.env['SUDO_OWNER_INTERRUPTS'];
   vi.restoreAllMocks();
 });
 

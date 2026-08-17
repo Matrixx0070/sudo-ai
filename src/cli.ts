@@ -67,7 +67,7 @@ import { TelegramAdapter } from './core/channels/telegram.js';
 import { getRunRegistry } from './core/agent/run-registry.js';
 import { getRunLanes } from './core/agent/run-lanes.js';
 import { getSteerBuffer } from './core/agent/steer-buffer.js';
-import { getQueueModeStore, decideQueueMode } from './core/channels/queue-modes.js';
+import { getQueueModeStore, decideQueueMode, ownerInterruptsEnabled } from './core/channels/queue-modes.js';
 import { makeStopKeyboard, renderStoppedCard, buildRegenInstruction } from './core/channels/telegram-run-controls.js';
 import { registerOutboundAdapter, sendToChannelOutbox, registeredOutboundChannels } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
@@ -2793,6 +2793,8 @@ ${question}`, kb);
             isCommand: false,
             runTier: active.tier,
             msgTier: telegram.isOwnerUser(msg.peerId) ? 'owner' : 'untrusted',
+            // Owner's newest message preempts the running loop immediately.
+            ownerInterrupts: ownerInterruptsEnabled(),
           });
           if (decision.action === 'steer') {
             getSteerBuffer().push(active.sessionId, msg.text ?? '', decision.tier);
@@ -2800,7 +2802,8 @@ ${question}`, kb);
             return;
           }
           if (decision.action === 'interrupt' && active.abort) {
-            active.abort('interrupted by a newer message');
+            active.abort('interrupted by a newer owner message');
+            log.info({ peerId: msg.peerId }, 'TX1/GW-5: owner message INTERRUPTED the active run — aborting and running the new message');
             // fall through — the replacement turn queues behind the aborting run.
           }
           // followup / collect → fall through to the normal coalescer/queue path.
@@ -3364,6 +3367,9 @@ ${question}`, kb);
           dailyLog,
           shouldSkipDailyLog: shouldSkipDailyLogForMessage,
           mentionGate: routedMentionOnly ? (m) => isAddressedToBot(m, routedBotNames) : undefined,
+          // Owner-interrupt seam: abort a running loop so the owner's newest
+          // message preempts it (same shared steering channel the loop honours).
+          abortRun: (sessionId, reason) => steeringChannel.signal(sessionId, { action: 'abort', payload: reason }),
         }));
       }
 
