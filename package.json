@@ -83,7 +83,7 @@
     "eval:ladder-gate": "tsx scripts/eval-ladder-gate.mts",
     "eval:ladder": "tsx scripts/eval-ladder.mts",
     "eval:replay": "tsx scripts/eval-replay.mts",
-    "check:arch": "pnpm check:max-lines && pnpm check:flags && vitest run tests/architecture",
+    "check:arch": "pnpm lint && pnpm check:max-lines && pnpm check:flags && vitest run tests/architecture",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "verify": "pnpm lint && pnpm test && pnpm build",

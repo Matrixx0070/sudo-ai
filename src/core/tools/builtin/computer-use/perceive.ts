@@ -8,7 +8,7 @@
  */
 
 import { createLogger } from '../../../shared/logger.js';
-import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
+import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { PerceptionService } from './core/perception.js';
 
 const log = createLogger('tool:computer-perceive');

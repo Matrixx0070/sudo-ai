@@ -7,7 +7,7 @@
  */
 
 import { createLogger } from '../../../shared/logger.js';
-import type { ToolDefinition, ToolContext, ToolResult } from '../types.js';
+import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import type { Action, ActionPlan } from './core/types.js';
 import { PerceptionService } from './core/perception.js';
 import { GroundingResolver } from './core/grounding.js';
