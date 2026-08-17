@@ -18,6 +18,8 @@ import { PlanRunStore, PlanRunner, type PlanRunState } from './core/plan-runner.
 import { SkillStore } from './core/skill-store.js';
 import { createEphemeralSession, attachSession, type Session } from './core/session.js';
 import { resolveDisplay } from './perceive.js';
+import { invokeAxAction } from './core/atspi.js';
+import type { Grounded } from './core/types.js';
 
 const log = createLogger('tool:computer-session');
 const KILL_SWITCH_ENV = 'SUDO_COMPUTER_USE_DISABLE';
@@ -198,6 +200,7 @@ export const runPlanTool: ToolDefinition = {
     resume: { type: 'string', required: false, description: 'Resume a previous runId instead of starting fresh.' },
     use_skill: { type: 'boolean', required: false, description: 'Reuse a saved skill matching the subgoal when no actions are given (default true).' },
     save_skill: { type: 'boolean', required: false, description: 'Induce/update a skill from this plan on success (default true).' },
+    mode: { type: 'string', required: false, enum: ['verified', 'batch'], description: '"verified" (default): per-action verify + recovery, durable/resumable. "batch": speculative — one perception, verify only at actions carrying an expect; faster, not resumable.' },
   },
   async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
     if (process.env[KILL_SWITCH_ENV] === '1') return { success: false, output: `computer: disabled (${KILL_SWITCH_ENV}=1)` };
@@ -205,6 +208,14 @@ export const runPlanTool: ToolDefinition = {
     const { display, shared } = resolveSessionDisplay(params['session']);
     const sink = new LinuxInputSink(display, shared);
     const journal = new ActionJournal(ctx.sessionId || 'default', display);
+
+    // Structured (API-first) actor: perform a grounded AX element's action via
+    // the accessibility interface instead of a pixel click. Fails soft to false
+    // → the executor falls back to coordinate injection.
+    const structuredActor = async (grounded: Grounded): Promise<boolean> => {
+      if (!grounded.element?.name) return false;
+      return invokeAxAction({ display, name: grounded.element.name, role: grounded.element.role, app: grounded.element.app });
+    };
 
     const makeExecutor = (state: PlanRunState) =>
       new ActionExecutor({
@@ -215,6 +226,7 @@ export const runPlanTool: ToolDefinition = {
         sink,
         ownerVerified: ctx.isOwner === true,
         journal,
+        structuredActor,
       });
 
     const runner = new PlanRunner({ store: planStore, makeExecutor });
@@ -250,6 +262,23 @@ export const runPlanTool: ToolDefinition = {
       return { success: false, output: 'computer.run_plan: no actions supplied and no matching skill found.' };
     }
 
+    const plan: ActionPlan = { subgoal, actions };
+
+    // Batch (speculative) mode: fast, non-durable, one-shot.
+    if (params['mode'] === 'batch') {
+      const exec = makeExecutor({ runId: 'batch', sessionId: ctx.sessionId || 'default', display, subgoal, actions, cursor: 0, status: 'running', results: [], createdAt: Date.now(), updatedAt: Date.now() });
+      const pr = await exec.runBatch(plan);
+      const structuredCount = pr.steps.filter((s) => s.structured).length;
+      const pointerCount = pr.steps.filter((s) => ['click', 'double_click', 'move', 'scroll'].includes(s.action.kind)).length;
+      if (usedSkillId) await skillStore.recordUse(usedSkillId, pr.success);
+      if (pr.success && params['save_skill'] !== false && !usedSkillId) await skillStore.induce(subgoal, actions);
+      return {
+        success: pr.success,
+        output: `plan "${subgoal}" (batch) ${pr.success ? 'done' : 'failed'} (${pr.steps.length} steps, ${structuredCount}/${pointerCount} pointer steps via structured AX)${usedSkillId ? ' [skill reused]' : ''}`,
+        data: { success: pr.success, steps: pr.steps.length, structuredCount, pointerCount, reason: pr.reason, usedSkill: usedSkillId },
+      };
+    }
+
     const runId = `run-${(ctx.sessionId || 'x').slice(0, 8)}-${Date.now().toString(36)}`;
     const result = await runner.start({ runId, sessionId: ctx.sessionId || 'default', display, subgoal, actions });
 
@@ -258,7 +287,6 @@ export const runPlanTool: ToolDefinition = {
       await skillStore.induce(subgoal, actions);
     }
 
-    const plan: ActionPlan = { subgoal, actions };
     return {
       success: result.status === 'done',
       output: `plan "${subgoal}" ${result.status} (${result.completed}/${result.total} steps)${usedSkillId ? ' [skill reused]' : ''}. runId=${result.runId}`,

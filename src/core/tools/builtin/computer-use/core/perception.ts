@@ -48,8 +48,27 @@ function rectsIntersect(
 
 export class PerceptionService {
   private seq = 0;
+  private cache = new Map<string, { snap: Snapshot; at: number }>();
 
   constructor(private readonly opts: PerceptionOptions = {}) {}
+
+  /**
+   * Return a recent snapshot for the display if one was captured within `ttlMs`,
+   * else capture fresh. Speeds up read-only perception when the screen has not
+   * been mutated since the last look. Invalidate after any action.
+   */
+  async captureCached(display: string, ttlMs = 400): Promise<Snapshot> {
+    const hit = this.cache.get(display);
+    if (hit && Date.now() - hit.at <= ttlMs) return hit.snap;
+    const snap = await this.capture(display);
+    this.cache.set(display, { snap, at: Date.now() });
+    return snap;
+  }
+
+  /** Drop any cached snapshot for a display (call after a mutating action). */
+  invalidate(display: string): void {
+    this.cache.delete(display);
+  }
 
   /** Capture a fused snapshot of the given display. */
   async capture(display: string): Promise<Snapshot> {

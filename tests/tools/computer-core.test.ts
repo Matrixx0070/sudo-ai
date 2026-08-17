@@ -30,6 +30,7 @@ function queuePerception(snaps: Snapshot[]): PerceptionService {
       idx++;
       return s;
     },
+    invalidate() {},
   };
   return fake as unknown as PerceptionService;
 }

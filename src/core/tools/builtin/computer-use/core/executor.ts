@@ -60,6 +60,13 @@ export interface ExecutorOptions {
   onEscalate?: (action: Action, snapshot: Snapshot, message: string) => Promise<void>;
   /** Settle time (ms) to let the UI react before the post-snapshot. Default 350. */
   settleMs?: number;
+  /**
+   * Structured-action hook (API-first): given a grounded AX element, try to
+   * perform the action via its accessibility action / focus instead of a pixel
+   * click. Returns true if it handled the action. Used for click/double_click
+   * when grounding resolved a real element. Falls back to the pixel sink on false.
+   */
+  structuredActor?: (grounded: Grounded, action: Action) => Promise<boolean>;
 }
 
 export class ActionExecutor {
@@ -105,7 +112,7 @@ export class ActionExecutor {
     while (true) {
       const res = await this.attempt(current, before, recovery.length > 0);
       if (res.verdict === 'ok') {
-        const step = this.mk(action, res.verdict, res.grounded, recovery, before.seq, res.afterSeq, start, res.message);
+        const step = this.mk(action, res.verdict, res.grounded, recovery, before.seq, res.afterSeq, start, res.message, res.structured);
         await this.journal(subgoal, step, before.hash, res.afterHash);
         return step;
       }
@@ -121,7 +128,7 @@ export class ActionExecutor {
             log.warn({ err: String(e) }, 'onEscalate threw');
           }
         }
-        const step = this.mk(action, res.verdict, res.grounded, recovery, before.seq, res.afterSeq, start, msg);
+        const step = this.mk(action, res.verdict, res.grounded, recovery, before.seq, res.afterSeq, start, msg, res.structured);
         await this.journal(subgoal, step, before.hash, res.afterHash);
         return step;
       }
@@ -154,7 +161,7 @@ export class ActionExecutor {
     action: Action,
     beforeInitial: Snapshot,
     isRetry: boolean,
-  ): Promise<{ verdict: Verdict; grounded?: Grounded; afterSeq: number; afterHash?: string; message: string }> {
+  ): Promise<{ verdict: Verdict; grounded?: Grounded; structured?: boolean; afterSeq: number; afterHash?: string; message: string }> {
     // On a retry, re-perceive so grounding uses the latest state.
     const before = isRetry ? await this.o.perception.capture(this.o.display) : beforeInitial;
 
@@ -184,7 +191,7 @@ export class ActionExecutor {
       }
     }
 
-    // Inject.
+    // Inject (structured/AX first when possible, pixel fallback).
     const inj = await this.inject(action, grounded);
     if (!inj.success) {
       return { verdict: 'error', grounded, afterSeq: before.seq, afterHash: before.hash, message: inj.error ?? 'injection failed' };
@@ -193,18 +200,34 @@ export class ActionExecutor {
     // Settle, then observe + verify.
     await new Promise((r) => setTimeout(r, this.settleMs));
     const after = await this.o.perception.capture(this.o.display);
+    this.o.perception.invalidate(this.o.display);
     const ok = this.verify(action.expect ?? { changed: true }, before, after);
     return {
       verdict: ok ? 'ok' : 'expectation-failed',
       grounded,
+      structured: inj.structured,
       afterSeq: after.seq,
       afterHash: after.hash,
       message: ok ? 'ok' : `expectation not met: ${JSON.stringify(action.expect ?? { changed: true })}`,
     };
   }
 
-  private async inject(action: Action, grounded?: Grounded): Promise<{ success: boolean; error?: string }> {
+  private async inject(action: Action, grounded?: Grounded): Promise<{ success: boolean; error?: string; structured?: boolean }> {
     const s = this.o.sink;
+    // API-first: for a click on a grounded AX element, try the structured actor.
+    if (
+      (action.kind === 'click' || action.kind === 'double_click') &&
+      this.o.structuredActor &&
+      grounded?.element &&
+      (grounded.source === 'element-index' || grounded.source === 'ax-text')
+    ) {
+      try {
+        const handled = await this.o.structuredActor(grounded, action);
+        if (handled) return { success: true, structured: true };
+      } catch {
+        /* fall through to pixel */
+      }
+    }
     switch (action.kind) {
       case 'click':
         return s.click(grounded!.x, grounded!.y);
@@ -253,11 +276,75 @@ export class ActionExecutor {
     afterSeq: number,
     start: number,
     message: string,
+    structured?: boolean,
   ): StepResult {
-    return { action, verdict, grounded, recovery, beforeSeq, afterSeq, durationMs: Date.now() - start, message };
+    return { action, verdict, grounded, structured, recovery, beforeSeq, afterSeq, durationMs: Date.now() - start, message };
   }
 
   private async journal(subgoal: string, step: StepResult, beforeHash?: string, afterHash?: string): Promise<void> {
     if (this.o.journal) await this.o.journal.record(subgoal, step, beforeHash, afterHash);
+  }
+
+  /**
+   * Speculative BATCH execution (the UFO2/OpenAI speed pattern): run a run of
+   * actions with ONE perception at the start and verify only at the actions that
+   * carry an explicit `expect` (checkpoints). This slashes perception round-trips
+   * versus per-action verification. It aborts immediately on an injection failure
+   * or a failed checkpoint expectation — so it never silently drifts past a
+   * broken step. Actions are grounded against the batch-start snapshot; put an
+   * `expect` on any action whose target depends on a prior action's effect.
+   *
+   * No per-action recovery ladder (that's what run()/step() are for) — a failed
+   * checkpoint returns control to the caller to re-plan or fall back to run().
+   */
+  async runBatch(plan: ActionPlan): Promise<PlanResult> {
+    const steps: StepResult[] = [];
+    const before = await this.o.perception.capture(this.o.display);
+    let checkpoint = before;
+
+    for (const action of plan.actions) {
+      const start = Date.now();
+      // Authority gate.
+      const decision = authorize({ surface: 'agent-tool', action: `computer.${action.kind}`, ownerVerified: this.o.ownerVerified });
+      if (!decision.proceed) {
+        steps.push(this.mk(action, 'refused', undefined, [], before.seq, before.seq, start, `refused: ${decision.reason}`));
+        return { subgoal: plan.subgoal, success: false, steps, reason: 'refused' };
+      }
+
+      // Ground against the batch-start snapshot (speculative).
+      let grounded: Grounded | undefined;
+      const needsPoint = action.kind === 'click' || action.kind === 'double_click' || action.kind === 'move' || action.kind === 'scroll';
+      if (needsPoint && action.target) {
+        grounded = await this.o.grounding.resolve(action.target, before);
+        if (grounded.x < 0 || grounded.confidence <= 0) {
+          steps.push(this.mk(action, 'grounding-failed', grounded, [], before.seq, before.seq, start, grounded.error ?? 'grounding failed'));
+          return { subgoal: plan.subgoal, success: false, steps, reason: 'grounding-failed' };
+        }
+      }
+
+      if (action.kind !== 'wait' && action.kind !== 'screenshot') {
+        const inj = await this.inject(action, grounded);
+        if (!inj.success) {
+          steps.push(this.mk(action, 'error', grounded, [], before.seq, before.seq, start, inj.error ?? 'injection failed'));
+          return { subgoal: plan.subgoal, success: false, steps, reason: 'injection-failed' };
+        }
+        // Only pay for a perception + verification at explicit checkpoints.
+        if (action.expect) {
+          await new Promise((r) => setTimeout(r, this.settleMs));
+          const after = await this.o.perception.capture(this.o.display);
+          this.o.perception.invalidate(this.o.display);
+          const ok = this.verify(action.expect, checkpoint, after);
+          steps.push(this.mk(action, ok ? 'ok' : 'expectation-failed', grounded, [], checkpoint.seq, after.seq, start, ok ? 'ok' : 'checkpoint failed', inj.structured));
+          if (!ok) return { subgoal: plan.subgoal, success: false, steps, reason: 'expectation-failed' };
+          checkpoint = after;
+        } else {
+          steps.push(this.mk(action, 'ok', grounded, [], before.seq, before.seq, start, 'batched (no checkpoint)', inj.structured));
+        }
+      } else if (action.kind === 'wait') {
+        await new Promise((r) => setTimeout(r, action.ms ?? 250));
+        steps.push(this.mk(action, 'ok', undefined, [], before.seq, before.seq, start, 'waited'));
+      }
+    }
+    return { subgoal: plan.subgoal, success: true, steps };
   }
 }

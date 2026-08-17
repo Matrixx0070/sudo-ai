@@ -191,6 +191,8 @@ export interface StepResult {
   action: Action;
   verdict: Verdict;
   grounded?: Grounded;
+  /** True when the action was performed via a structured (AX/DOM) path, not a pixel click. */
+  structured?: boolean;
   /** Recovery attempts made (in order) before this verdict. */
   recovery: RecoveryRung[];
   /** Snapshot seq before / after the action. */

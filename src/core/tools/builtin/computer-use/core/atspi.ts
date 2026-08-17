@@ -82,6 +82,93 @@ def main():
 sys.exit(main())
 `;
 
+/**
+ * Inlined Python that INVOKES an element's accessibility action (structured
+ * action, no pixel click). Matches the first actionable element by app + name
+ * (+ optional role), then performs its default action (Action iface index 0, or
+ * grab_focus for text entries). Prints "OK" / "FAIL:<reason>".
+ */
+export const ATSPI_ACTION_SCRIPT = String.raw`
+import os, sys
+def main():
+    os.environ.setdefault("GTK_MODULES","gail:atk-bridge"); os.environ.setdefault("QT_ACCESSIBILITY","1")
+    try:
+        import gi; gi.require_version("Atspi","2.0"); from gi.repository import Atspi
+    except Exception as e:
+        print("FAIL:no-bindings"); return 0
+    want_name=(os.environ.get("CU_MATCH_NAME","") or "").lower()
+    want_role=(os.environ.get("CU_MATCH_ROLE","") or "").lower()
+    want_app=(os.environ.get("CU_MATCH_APP","") or "").lower()
+    hit={"done":False}
+    def visit(acc, app_name, depth):
+        if acc is None or hit["done"] or depth>40: return
+        try: role=acc.get_role_name()
+        except Exception: role=""
+        try: name=acc.get_name() or ""
+        except Exception: name=""
+        if want_name and want_name in name.lower() and (not want_role or want_role==role.lower()):
+            try:
+                act=acc.get_action_iface() if hasattr(acc,"get_action_iface") else acc
+                n=act.get_n_actions() if hasattr(act,"get_n_actions") else 0
+                if n>0:
+                    act.do_action(0); print("OK:action"); hit["done"]=True; return
+            except Exception: pass
+            try:
+                acc.grab_focus(); print("OK:focus"); hit["done"]=True; return
+            except Exception: pass
+        try: c=acc.get_child_count()
+        except Exception: c=0
+        for k in range(min(c,200)):
+            try: ch=acc.get_child_at_index(k)
+            except Exception: ch=None
+            visit(ch, app_name, depth+1)
+            if hit["done"]: return
+    try:
+        desk=Atspi.get_desktop(0); na=desk.get_child_count()
+    except Exception:
+        print("FAIL:no-bus"); return 0
+    for a in range(na):
+        try: app=desk.get_child_at_index(a); an=app.get_name() if app else ""
+        except Exception: app,an=None,""
+        if want_app and want_app not in (an or "").lower(): continue
+        visit(app, an, 0)
+        if hit["done"]: break
+    if not hit["done"]: print("FAIL:no-match")
+    return 0
+sys.exit(main())
+`;
+
+export interface InvokeAxActionOptions {
+  display: string;
+  name: string;
+  role?: string;
+  app?: string;
+  timeoutMs?: number;
+  pythonBin?: string;
+}
+
+/**
+ * Invoke an element's accessibility action directly (structured, no pixel
+ * click). Returns true when the AX action/focus succeeded. Fail-soft: false on
+ * any error so the caller falls back to coordinate injection.
+ */
+export function invokeAxAction(opts: InvokeAxActionOptions): Promise<boolean> {
+  const { display, name, role, app, timeoutMs = 6000, pythonBin = 'python3' } = opts;
+  return new Promise((resolve) => {
+    const env = {
+      ...process.env,
+      DISPLAY: display,
+      CU_MATCH_NAME: name,
+      CU_MATCH_ROLE: role ?? '',
+      CU_MATCH_APP: app ?? '',
+    };
+    execFile(pythonBin, ['-c', ATSPI_ACTION_SCRIPT], { env, timeout: timeoutMs, maxBuffer: 1 << 20 }, (err, stdout) => {
+      if (err) return resolve(false);
+      resolve(String(stdout || '').startsWith('OK'));
+    });
+  });
+}
+
 export interface DumpAxOptions {
   display: string;
   maxElements?: number;
