@@ -271,7 +271,10 @@ export function logAuthorityPosture(): void {
         {
           telegramOwners: who.telegram,
           webChatToken: who.webToken ? 'configured' : 'NOT set (web chat cannot be owner)',
-          gatewayToken: who.gatewayToken ? 'configured' : 'NOT set (API cannot be owner)',
+          gatewayApi: who.gatewayToken
+            ? 'GATEWAY_TOKEN configured — token holders are owners'
+            : 'GATEWAY_TOKEN NOT set — API owner authority is DENIED under god mode ' +
+              '(loopback callers are admitted but not owners; set GATEWAY_TOKEN to grant it)',
         },
         'GOD MODE ACTIVE — these identities can execute on the real host through sudo-ai',
       );

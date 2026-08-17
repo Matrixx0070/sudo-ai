@@ -10,7 +10,7 @@
  * owner-gated behaviour and god mode never applied to them.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { handleChatCompletions } from '../../src/core/gateway/http-api.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
@@ -67,5 +67,52 @@ describe('gateway API owner attribution', () => {
     const { calls, deps, req, res } = harness();
     await handleChatCompletions(req, res, deps);
     expect(calls[0]?.opts?.caller?.isOwner).toBe(false);
+  });
+});
+
+describe('gateway API — god mode denies unauthenticated loopback owner status', () => {
+  // Adversarial review 2026-08-17 reproduced this: authenticateHttp's
+  // loopback-direct rule returns isOwner:true when NO secret is configured.
+  // It admits a local caller but proves no identity, so under god mode it
+  // would hand host root to any process on the box.
+  const KEYS = ['SUDO_AUTHORITY_GOD_MODE', 'GATEWAY_TOKEN', 'GATEWAY_SECRET'] as const;
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = {};
+    for (const k of KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+  });
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it('loopback-direct callers are NOT owners while god mode is on', async () => {
+    process.env['SUDO_AUTHORITY_GOD_MODE'] = '1';
+    const { authenticateHttp } = await import('../../src/core/gateway/auth.js');
+    const { isGodMode } = await import('../../src/core/security/execution-authority.js');
+
+    const req = { socket: { remoteAddress: '127.0.0.1' }, headers: {} } as never;
+    const auth = authenticateHttp(req);
+
+    // The rule still ADMITS (that behaviour is unchanged)…
+    expect(auth.ok).toBe(true);
+    expect(auth.isOwner).toBe(true);
+
+    // …but the route must not turn that into owner authority under god mode.
+    const gatewayOwner = auth.isOwner === true && !(isGodMode() && auth.credential === 'loopback');
+    expect(gatewayOwner).toBe(false);
+  });
+
+  it('loopback callers DO keep owner status when god mode is off', async () => {
+    const { authenticateHttp } = await import('../../src/core/gateway/auth.js');
+    const { isGodMode } = await import('../../src/core/security/execution-authority.js');
+
+    const req = { socket: { remoteAddress: '127.0.0.1' }, headers: {} } as never;
+    const auth = authenticateHttp(req);
+    const gatewayOwner = auth.isOwner === true && !(isGodMode() && auth.credential === 'loopback');
+    expect(gatewayOwner).toBe(true);
   });
 });

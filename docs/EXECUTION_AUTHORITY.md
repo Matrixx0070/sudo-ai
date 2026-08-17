@@ -104,6 +104,14 @@ second half of the directive ("react only to the owner's command"):
 | Telegram | sender id is in the constructor allowlist (`TELEGRAM_CHAT_ID`) | pairing-admitted peers are admitted but never owners |
 | Web chat | the request/connection proves `WEB_CHAT_TOKEN` | loopback/LAN admission is not ownership |
 | Gateway API (`/v1/chat/completions` — TUI, scripts, remote owner clients) | the request authenticates with `GATEWAY_TOKEN` / gateway secret | resolved by `authenticateHttp`, threaded into the turn |
+
+> **Loopback is admission, not ownership.** `authenticateHttp` admits a
+> local-direct caller when no secret is configured — convenient, but it proves
+> no identity. Under god mode that would hand host root to any process on the
+> box (or a same-host proxy sending no forwarded headers), so the chat route
+> refuses owner status to the bare `loopback` credential whenever god mode is
+> on, and says so in the log. **Set `GATEWAY_TOKEN` to give the API real owner
+> authority.**
 | Router channels (Discord, Slack, email, WhatsApp, Signal, Matrix, IRC) | sender id is in that channel's `owners:` list in `config/channels.json5` | resolved by the access policy, stamped by the router |
 | cron, webhooks, remote workers, MCP, self-build, eval | never | no owner stamp → treated as non-owner, sandbox + containment apply |
 

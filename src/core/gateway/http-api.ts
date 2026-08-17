@@ -17,6 +17,7 @@ import type { Server as HttpServer, IncomingMessage, ServerResponse } from 'node
 import { createLogger } from '../shared/logger.js';
 import { serveStaticFile } from './static-middleware.js';
 import { authenticateHttp, unifiedAuthEnabled } from './auth.js';
+import { isGodMode } from '../security/execution-authority.js';
 import { getCacheKey, cacheGet, cacheSet } from './cache.js';
 import { registerAdminRoutes } from './admin-routes.js';
 import { registerAdminSleepRoutes } from './admin-sleep-routes.js';
@@ -604,10 +605,26 @@ export function attachHttpApi(server: HttpServer, deps: HttpApiDeps): void {
       const gatewayAuth = authenticateHttp(req);
       if (!gatewayAuth.ok) { sendError(res, 401, 'Unauthorized: invalid or missing bearer token'); return; }
 
+      // Owner attribution for the turn. The bare loopback-direct rule ADMITS a
+      // local caller when no secret is configured, but it proves no identity —
+      // under god mode that would hand host root to any process on the box (or
+      // a same-host proxy that emits no forwarded headers). Adversarial review
+      // 2026-08-17 reproduced exactly that. Admission is not ownership: god
+      // mode requires a real credential.
+      const gatewayOwner =
+        gatewayAuth.isOwner === true &&
+        !(isGodMode() && gatewayAuth.credential === 'loopback');
+      if (gatewayAuth.isOwner === true && !gatewayOwner) {
+        log.warn(
+          { credential: gatewayAuth.credential, reason: gatewayAuth.reason },
+          'GOD MODE: loopback-direct caller admitted but NOT treated as owner — set GATEWAY_TOKEN to grant owner authority over the API',
+        );
+      }
+
       if (method === 'GET' && pathname === '/v1/models') { handleModels(res); return; }
 
       if (method === 'POST' && pathname === '/v1/chat/completions') {
-        handleChatCompletions(req, res, deps, gatewayAuth.isOwner === true).catch((err: unknown) => {
+        handleChatCompletions(req, res, deps, gatewayOwner).catch((err: unknown) => {
           log.error({ err: err instanceof Error ? err.message : String(err) }, 'Unhandled error in handleChatCompletions');
           if (!res.headersSent) sendError(res, 500, 'Internal server error');
         });
