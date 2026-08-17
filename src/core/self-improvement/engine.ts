@@ -215,7 +215,7 @@ export async function runSelfImprovement(options: {
    * ambiguous 'general' rated rows are re-labelled before pattern detection.
    */
   taskClassifier?: ToolBrain;
-}): Promise<{ actions: ImprovementAction[]; healthScore: number; summary: string; rollbacks: ImprovementRollback[] }> {
+}): Promise<{ actions: ImprovementAction[]; healthScore: number; summary: string; rollbacks: ImprovementRollback[]; reclassified: number }> {
 
   const trigger    = options.trigger ?? 'manual';
   const windowDays = options.windowDays ?? 14;
@@ -227,11 +227,12 @@ export async function runSelfImprovement(options: {
   // Upgrade coarse 'general' labels on rated rows to accurate categories before
   // detection groups by task_type. Bounded + fail-soft: a classifier hiccup
   // must never sink the whole run.
+  let reclassified = 0;
   if (options.taskClassifier && existsSync(DB_PATH)) {
     try {
       const since = new Date(Date.now() - windowDays * 86_400_000).toISOString();
-      const relabelled = await reclassifyAmbiguousRatedTypes(options.taskClassifier, since);
-      if (relabelled > 0) log.info({ relabelled }, 'Feedback task types refined by model before detection');
+      reclassified = await reclassifyAmbiguousRatedTypes(options.taskClassifier, since);
+      if (reclassified > 0) log.info({ reclassified }, 'Feedback task types refined by model before detection');
     } catch (err) {
       log.warn({ err: String(err) }, 'Task-type refinement failed — continuing with heuristic labels');
     }
@@ -474,12 +475,17 @@ export async function runSelfImprovement(options: {
 
   // --- SUMMARY ---
   const appliedCount = actions.filter(a => a.applied).length;
-  const summary = buildSummary(patterns, actions, appliedCount);
+  let summary = buildSummary(patterns, actions, appliedCount);
+  // Surface the model-refinement count so callers report it honestly instead of
+  // guessing (the agent otherwise confabulated "0 — engine doesn't reclassify").
+  if (reclassified > 0) {
+    summary += `\n\n**Feedback types refined (model):** ${reclassified} row(s) re-labelled from 'general' before analysis.`;
+  }
 
-  log.info({ appliedCount, healthScore: patterns.healthScore, rollbackCount: rollbacks.length },
+  log.info({ appliedCount, healthScore: patterns.healthScore, rollbackCount: rollbacks.length, reclassified },
     'Self-improvement run complete');
 
-  return { actions, healthScore: patterns.healthScore, summary, rollbacks };
+  return { actions, healthScore: patterns.healthScore, summary, rollbacks, reclassified };
 }
 
 // ---------------------------------------------------------------------------

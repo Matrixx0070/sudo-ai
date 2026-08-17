@@ -225,6 +225,7 @@ export const selfImproveTool: ToolDefinition = {
           healthScore: result.healthScore,
           actionsApplied: result.actions.filter(a => a.applied).length,
           actionsTotal: result.actions.length,
+          feedbackTypesReclassified: result.reclassified,
           // AL8.0 R5: rollback records were produced by the engine and then
           // discarded here — surface them so an operator (or a future revert
           // path) can see exactly what was applied and when.
