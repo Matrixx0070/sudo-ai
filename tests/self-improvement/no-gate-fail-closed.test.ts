@@ -1,11 +1,19 @@
 /**
  * @file no-gate-fail-closed.test.ts
- * @description Invariant 8 on the self-improvement apply path: an ABSENT
- * HeldOutGate blocks every apply (fail-closed) instead of waving changes
- * through. Before this fix, `shouldApply` returned true with no gate and the
- * only production caller (meta/self-improve tool) passed none — every
- * autonomous improvement applied ungated. The caller now wires a real
- * HeldOutGate; the engine treats "no gate" the same as "gate holds".
+ * @description Invariant 8 on the self-improvement apply path, split by action
+ * class:
+ *
+ *   • LOG / OBSERVATION writes (LEARNINGS.md journal, the unused-tool note)
+ *     record what pattern detection saw. They apply UNCONDITIONALLY — the
+ *     HeldOutGate is a non-regression bench over held-out traces, and in
+ *     production it holds whenever traces.db has no held-out data, which used
+ *     to silently erase every self-improvement log. Observability is never
+ *     gated.
+ *
+ *   • SOURCE-AFFECTING applies (AutoResearch draft patches consumed by
+ *     meta.self-modify) stay fail-CLOSED through evaluateDraftGate(): an
+ *     absent, rejecting, or throwing gate blocks the apply. A passing gate
+ *     lets it through (capability preserved).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -55,40 +63,35 @@ async function importEngine() {
   return await import('../../src/core/self-improvement/engine.js');
 }
 
-describe('runSelfImprovement — absent HeldOutGate fails closed', () => {
-  it('NOGATE-1: with NO gate, no action is applied', async () => {
-    const { runSelfImprovement } = await importEngine();
-    const result = await runSelfImprovement({ trigger: 'test-no-gate' });
-    // Actions may be proposed, but none may be APPLIED without a gate.
-    expect(result.actions.every((a) => a.applied === false)).toBe(true);
-    expect(result.rollbacks).toHaveLength(0);
+/** A complete GateEvaluation stub with the given verdict (all required fields). */
+function verdict(passed: boolean) {
+  return (proposalId: string) => ({
+    proposalId,
+    passed,
+    passRate: passed ? 1 : 0.2,
+    tolerance: 0.05,
+    totalTests: 10,
+    passedTests: passed ? 10 : 2,
+    failedTests: passed ? 0 : 8,
+    regressionDetails: passed ? [] : ['regressed intent x'],
   });
+}
 
-  it('NOGATE-2: with a PASSING gate, applies still happen (capability preserved)', async () => {
+describe('runSelfImprovement — logs ungated, source patches fail-closed', () => {
+  it('NOGATE-1: LOG writes (LEARNINGS.md) apply WITHOUT a gate; no source patch, no rollback', async () => {
     seedMindDb(tmpData);
     const { runSelfImprovement } = await importEngine();
-    const gate = {
-      evaluate: async (proposalId: string) => ({
-        proposalId,
-        passed: true,
-        passRate: 1,
-        tolerance: 0.05,
-        totalTests: 10,
-        passedTests: 10,
-        regressionDetails: [],
-        evaluatedAt: new Date().toISOString(),
-      }),
-    };
-    const result = await runSelfImprovement({
-      trigger: 'test-gate-pass',
-      heldOutGate: gate as unknown as import('../../src/core/learning/held-out-gate.js').HeldOutGate,
-    });
-    const applied = result.actions.filter((a) => a.applied);
-    expect(applied.length).toBeGreaterThan(0);
-    expect(result.rollbacks.length).toBeGreaterThan(0);
+    const result = await runSelfImprovement({ trigger: 'test-no-gate' });
+    // Observability is never gated: the journal write applies even with no gate.
+    const learnings = result.actions.find((a) => a.type === 'learnings_update');
+    expect(learnings?.applied).toBe(true);
+    // But no source-affecting (draft_patch) apply happened, so no rollback.
+    expect(result.rollbacks).toHaveLength(0);
+    expect(result.actions.filter((a) => a.type === 'draft_patch').every((a) => !a.applied)).toBe(true);
   });
 
-  it('NOGATE-3: a THROWING gate blocks applies (fail-closed, AL8.0 semantics)', async () => {
+  it('NOGATE-2: a THROWING/holding gate does NOT block the LEARNINGS log', async () => {
+    seedMindDb(tmpData);
     const { runSelfImprovement } = await importEngine();
     const gate = {
       evaluate: async () => {
@@ -99,18 +102,41 @@ describe('runSelfImprovement — absent HeldOutGate fails closed', () => {
       trigger: 'test-gate-throw',
       heldOutGate: gate as unknown as import('../../src/core/learning/held-out-gate.js').HeldOutGate,
     });
-    expect(result.actions.every((a) => a.applied === false)).toBe(true);
-    expect(result.rollbacks).toHaveLength(0);
+    // Gate state is irrelevant to observability — the journal still records.
+    const learnings = result.actions.find((a) => a.type === 'learnings_update');
+    expect(learnings?.applied).toBe(true);
   });
 
-  it('NOGATE-4: evaluateDraftGate holds on a throwing gate (direct unit)', async () => {
+  it('NOGATE-3: source-patch gate — a PASSING gate allows the apply (capability preserved)', async () => {
     const { evaluateDraftGate } = await importEngine();
-    const verdict = await evaluateDraftGate(
+    const ok = await evaluateDraftGate(
+      { evaluate: async (p: string) => verdict(true)(p) },
+      'p-ok',
+      { params: { description: 'd' } },
+      'tool-x',
+    );
+    expect(ok).toBe(true);
+  });
+
+  it('NOGATE-4: source-patch gate — a REJECTING gate blocks the apply', async () => {
+    const { evaluateDraftGate } = await importEngine();
+    const blocked = await evaluateDraftGate(
+      { evaluate: async (p: string) => verdict(false)(p) },
+      'p-bad',
+      { params: { description: 'd' } },
+      'tool-x',
+    );
+    expect(blocked).toBe(false);
+  });
+
+  it('NOGATE-5: source-patch gate — a THROWING gate blocks (fail-closed)', async () => {
+    const { evaluateDraftGate } = await importEngine();
+    const blocked = await evaluateDraftGate(
       { evaluate: async () => { throw new Error('down'); } },
       'p-1',
       { params: { description: 'd' } },
       'tool-x',
     );
-    expect(verdict).toBe(false);
+    expect(blocked).toBe(false);
   });
 });

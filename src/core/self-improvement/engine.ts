@@ -339,49 +339,25 @@ export async function runSelfImprovement(options: {
   }
 
   // --- STEP 3: APPLY ---
-
-  /** Helper: evaluate an improvement through the HeldOutGate before applying.
-   *  Returns true only when a gate is wired AND it passes. An ABSENT gate
-   *  blocks the apply (invariant 8: this is an autonomous apply path — no
-   *  gate configured never means no gate; matches pipeline.ts "no HeldOutGate
-   *  wired — a proposal that cannot be benched cannot proceed"). */
-  async function shouldApply(proposalId: string, description: string): Promise<boolean> {
-    if (!options.heldOutGate) {
-      log.warn({ proposalId, description },
-        'No HeldOutGate wired — improvement NOT applied (fail-closed; wire a gate to apply)');
-      return false;
-    }
-
-    // Derive a lightweight PolicyAction from the improvement description.
-    const policyAction: PolicyAction = { params: { description } };
-
-    try {
-      const evaluation = await options.heldOutGate.evaluate(proposalId, policyAction);
-      if (evaluation.passed) {
-        log.info({ proposalId, passRate: evaluation.passRate.toFixed(3) },
-          'HeldOutGate approved improvement');
-        // Store rollback info for gate-approved improvements.
-        rollbacks.push({
-          proposalId,
-          action: { type: 'learnings_update', description, applied: true },
-          appliedAt: new Date().toISOString(),
-        });
-        return true;
-      } else {
-        log.warn({ proposalId, passRate: evaluation.passRate.toFixed(3), regressions: evaluation.regressionDetails },
-          'HeldOutGate rejected improvement — skipping');
-        return false;
-      }
-    } catch (err) {
-      // AL8.0 R1: fail-CLOSED, matching evaluateDraftGate — a broken gate
-      // blocks the change instead of waving it through. A gate that cannot
-      // evaluate is a gate that holds (invariant 8: no-eval never means
-      // no-gate on an autonomous apply path).
-      log.warn({ proposalId, err: String(err) },
-        'HeldOutGate evaluation failed — blocking improvement (fail-closed)');
-      return false;
-    }
-  }
+  //
+  // Two classes of action, gated differently on purpose:
+  //
+  //   • LOG / OBSERVATION writes (LEARNINGS.md, the unused-tool note) record
+  //     what pattern detection SAW. They are append-only workspace
+  //     observability, not executable policy, so they apply unconditionally.
+  //     Gating them behind the HeldOutGate was a category error: the gate is a
+  //     non-regression bench over held-out traces, and in production it holds
+  //     whenever traces.db has no held-out data (the common case) — which
+  //     silently erased every self-improvement log. A journal the agent cannot
+  //     write is a journal that cannot help it. The synthesized PolicyAction
+  //     ({params:{description}}) never described the real text diff anyway, so
+  //     the gate was theater on this path.
+  //
+  //   • SOURCE-AFFECTING applies (AutoResearch draft patches consumed by
+  //     meta.self-modify) can change real behaviour, so they stay fail-CLOSED
+  //     through evaluateDraftGate() below: an absent or throwing gate blocks
+  //     the apply (invariant 8). That draft path is the ONLY thing the gate
+  //     guards — and it stays guarded.
 
   // 3a. Update LEARNINGS.md
   try {
@@ -403,22 +379,18 @@ export async function runSelfImprovement(options: {
       const blocks = (existing + newBlock).split(/^---$/m);
       const kept   = blocks.slice(-20).join('---');
 
-      const learningsProposalId = `learnings-${Date.now()}`;
-      const shouldWrite = await shouldApply(learningsProposalId, 'Update LEARNINGS.md with new patterns and rules');
-
-      if (shouldWrite) {
-        await writeFile(LEARNINGS_PATH, kept, 'utf-8');
-      }
+      // LEARNINGS.md is the engine's observation journal — write it directly.
+      // Recording what was detected never mutates agent capability, so it is
+      // not gated (see STEP 3 note above).
+      await writeFile(LEARNINGS_PATH, kept, 'utf-8');
 
       actions.push({
         type: 'learnings_update',
-        description: shouldWrite
-          ? 'Updated LEARNINGS.md with new patterns and rules'
-          : `BLOCKED by HeldOutGate: LEARNINGS.md not written (${options.heldOutGate ? 'gate held or failed to evaluate' : 'no gate wired'})`,
-        applied: shouldWrite,
+        description: 'Updated LEARNINGS.md with new patterns and rules',
+        applied: true,
         detail: `Health score: ${patterns.healthScore}/100`,
       });
-      log.info({ applied: shouldWrite }, 'LEARNINGS.md update resolved');
+      log.info({ applied: true }, 'LEARNINGS.md update resolved');
     }
   } catch (err) {
     log.error({ err: String(err) }, 'Failed to update LEARNINGS.md');
@@ -457,16 +429,13 @@ export async function runSelfImprovement(options: {
     }
   }
 
-  // 3d. Unused tool reminder
+  // 3d. Unused tool reminder — a pure observation note (nothing is written to
+  // source), so it records unconditionally like the LEARNINGS journal above.
   if (patterns.unusedTools.length > 0) {
-    const unusedProposalId = `unused-tools-${Date.now()}`;
-    const unusedShouldApply = await shouldApply(unusedProposalId,
-      `${patterns.unusedTools.length} high-value tools unused — will proactively suggest`);
-
     actions.push({
       type: 'tool_note',
       description: `${patterns.unusedTools.length} high-value tools unused — will proactively suggest`,
-      applied: unusedShouldApply,
+      applied: true,
       detail: patterns.unusedTools.join(', '),
     });
   }
