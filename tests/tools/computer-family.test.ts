@@ -62,8 +62,10 @@ describe('computer.* family (Phase 0)', () => {
       'computer.click',
       'computer.key',
       'computer.perceive',
+      'computer.run_plan',
       'computer.screenshot',
       'computer.scroll',
+      'computer.session',
       'computer.type',
       'computer.window',
     ]);

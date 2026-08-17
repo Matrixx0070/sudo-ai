@@ -94,7 +94,8 @@ export async function executeComputerAction(action: ScreenAction): Promise<Compu
         if (!action.text) {
           return { action: 'type', success: false, error: 'text is required for type action' };
         }
-        await execFileAsync('xdotool', ['type', '--delay', '50', action.text]);
+        // `--` terminates option parsing so text starting with a dash is literal.
+        await execFileAsync('xdotool', ['type', '--delay', '50', '--', action.text]);
         log.info({ chars: action.text.length }, 'Typed text');
         return { action: `type(${action.text.substring(0, 30)}...)`, success: true };
       }
@@ -124,8 +125,11 @@ export async function executeComputerAction(action: ScreenAction): Promise<Compu
         // Sanitise: allow only alphanumeric, +, -, _
         const safeKey = action.key.replace(/[^a-zA-Z0-9+\-_]/g, '');
         if (!safeKey) return { action: 'key', success: false, error: 'key name contained invalid characters' };
+        // Reject a leading dash so a sanitised value like "--clearmodifiers" can't
+        // be smuggled as an xdotool option; terminate options with `--` too.
+        if (safeKey.startsWith('-')) return { action: 'key', success: false, error: 'key name contained invalid characters' };
 
-        await execFileAsync('xdotool', ['key', safeKey]);
+        await execFileAsync('xdotool', ['key', '--', safeKey]);
         log.info({ key: safeKey }, 'Key pressed');
         return { action: `key(${safeKey})`, success: true };
       }

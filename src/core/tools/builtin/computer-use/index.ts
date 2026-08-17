@@ -48,6 +48,7 @@ import type { ToolRegistry } from '../../registry.js';
 import { createComputerUse } from './cross-platform/index.js';
 import type { IComputerUse } from './cross-platform/index.js';
 import { perceiveTool } from './perceive.js';
+import { sessionTool, runPlanTool } from './session-tools.js';
 
 const log = createLogger('tool:computer');
 
@@ -269,6 +270,8 @@ export const computerUseFamily: ToolDefinition[] = [
   keyTool,
   scrollTool,
   windowTool,
+  sessionTool,
+  runPlanTool,
 ];
 
 /**

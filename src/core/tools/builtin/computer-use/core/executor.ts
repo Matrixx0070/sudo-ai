@@ -71,6 +71,15 @@ export class ActionExecutor {
     this.settleMs = o.settleMs ?? 350;
   }
 
+  /**
+   * Execute a single action (with the full recovery ladder). Public so a
+   * resumable runner can drive a plan one step at a time, persisting between
+   * steps for restart survival.
+   */
+  step(subgoal: string, action: Action): Promise<StepResult> {
+    return this.runAction(subgoal, action);
+  }
+
   /** Run a whole plan; stops at the first action that fails after recovery. */
   async run(plan: ActionPlan): Promise<PlanResult> {
     const steps: StepResult[] = [];

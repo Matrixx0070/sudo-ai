@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 825,
+  "count": 826,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -167,6 +167,7 @@
     "SUDO_COMPLETION_VERIFY_ALL",
     "SUDO_COMPLETION_VERIFY_RETRY",
     "SUDO_COMPUTER_USE_DISABLE",
+    "SUDO_COMPUTER_VIEWPORT",
     "SUDO_CONNECTOR_REGISTRY",
     "SUDO_CONNECTOR_REGISTRY_URL",
     "SUDO_CONSCIOUSNESS_GATE",
