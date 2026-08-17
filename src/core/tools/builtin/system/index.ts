@@ -23,6 +23,7 @@ import { apiCallTool } from './api-call.js';
 import { execTool } from './shell-exec.js';
 import { backupBrainTool } from './backup-brain.js';
 import { credentialManagerTool } from './credential-manager.js';
+import { hostTool } from './host.js';
 import { createLogger } from '../../../shared/logger.js';
 
 const logger = createLogger('system-tools-index');
@@ -44,6 +45,7 @@ const SYSTEM_TOOLS = [
   execTool,
   backupBrainTool,
   credentialManagerTool,
+  hostTool,
 ] as const;
 
 /**
