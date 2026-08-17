@@ -67,7 +67,7 @@ import { TelegramAdapter } from './core/channels/telegram.js';
 import { getRunRegistry } from './core/agent/run-registry.js';
 import { getRunLanes } from './core/agent/run-lanes.js';
 import { getSteerBuffer } from './core/agent/steer-buffer.js';
-import { getQueueModeStore, decideQueueMode, ownerInterruptsEnabled, interruptAckEnabled, INTERRUPT_ACK_TEXT } from './core/channels/queue-modes.js';
+import { getQueueModeStore, decideQueueMode, ownerMidRunMode, interruptAckEnabled, INTERRUPT_ACK_TEXT } from './core/channels/queue-modes.js';
 import { makeStopKeyboard, renderStoppedCard, buildRegenInstruction } from './core/channels/telegram-run-controls.js';
 import { registerOutboundAdapter, sendToChannelOutbox, registeredOutboundChannels } from './core/channels/channel-outbox.js';
 import { MessageCoalescer, isAddressedToBot } from './core/channels/message-coalescer.js';
@@ -2793,9 +2793,31 @@ ${question}`, kb);
             isCommand: false,
             runTier: active.tier,
             msgTier: telegram.isOwnerUser(msg.peerId) ? 'owner' : 'untrusted',
-            // Owner's newest message preempts the running loop immediately.
-            ownerInterrupts: ownerInterruptsEnabled(),
+            // How to treat the owner's mid-run message (default: concurrent).
+            ownerMidRun: ownerMidRunMode(),
           });
+          if (decision.action === 'concurrent') {
+            // Answer the owner in the BACKGROUND without touching the running
+            // task: run the new message on a separate side session (off the main
+            // peer queue, so it runs in parallel) and reply. The original run
+            // keeps going. Fire-and-forget; never blocks the poll handler.
+            const replyTo = msg.chatId ?? msg.peerId;
+            log.info({ peerId: msg.peerId }, 'owner mid-run message → concurrent background answer (main run keeps running)');
+            void (async () => {
+              try {
+                const side = await dualSessionManager.getOrCreate('telegram', `${msg.peerId}#side`);
+                const res = await finalAgentLoop.run(String(side.id), msg.text ?? '', undefined, {
+                  race: true,
+                  caller: { isOwner: telegram.isOwnerUser(msg.peerId), channel: 'telegram', peerId: msg.peerId },
+                });
+                const text = res?.text?.trim();
+                if (text) await telegram.send(replyTo, text);
+              } catch (e) {
+                log.warn({ err: String(e), peerId: msg.peerId }, 'concurrent side-answer failed');
+              }
+            })();
+            return;
+          }
           if (decision.action === 'steer') {
             getSteerBuffer().push(active.sessionId, msg.text ?? '', decision.tier);
             log.info({ peerId: msg.peerId, tier: decision.tier }, 'TX1/GW-5: message steered into the active run (not queued as a new turn)');

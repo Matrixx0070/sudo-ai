@@ -24,7 +24,7 @@ import { requestMissionWake } from '../agent/mission/wake.js';
 import { getRunRegistry } from '../agent/run-registry.js';
 import { getRunLanes, type RunLane } from '../agent/run-lanes.js';
 import { getSteerBuffer } from '../agent/steer-buffer.js';
-import { getQueueModeStore, decideQueueMode, ownerInterruptsEnabled, interruptAckEnabled, INTERRUPT_ACK_TEXT } from './queue-modes.js';
+import { getQueueModeStore, decideQueueMode, ownerMidRunMode, interruptAckEnabled, INTERRUPT_ACK_TEXT } from './queue-modes.js';
 import type { MessageHandler, UnifiedMessage } from './types.js';
 import type { JournalEvent } from '../sessions/journal-types.js';
 import type { AgentEvent } from '../agent/types.js';
@@ -252,8 +252,27 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
           isCommand: false,
           runTier: active.tier,
           msgTier: msg.isOwner === true ? 'owner' : 'untrusted',
-          ownerInterrupts: ownerInterruptsEnabled(),
+          ownerMidRun: ownerMidRunMode(),
         });
+        if (decision.action === 'concurrent') {
+          // Answer the owner in the background on a separate side session while
+          // the running task continues; fire-and-forget, off the main flow.
+          log.info({ channel: msg.channel, peerId: msg.peerId }, 'GW-5: owner mid-run message → concurrent background answer (main run keeps running)');
+          void (async () => {
+            try {
+              const side = await deps.sessionManager.getOrCreate(msg.channel, `${msg.peerId}#side`);
+              const res = await deps.agentLoop.run(String(side.id), msg.text ?? '', undefined, {
+                race: true,
+                caller: { isOwner: msg.isOwner === true, channel: msg.channel, peerId: msg.peerId },
+              });
+              const text = res?.text?.trim();
+              if (text) await deps.send(msg, text);
+            } catch (e) {
+              log.warn({ err: String(e), channel: msg.channel, peerId: msg.peerId }, 'concurrent side-answer failed');
+            }
+          })();
+          return;
+        }
         if (decision.action === 'steer') {
           getSteerBuffer().push(active.sessionId, msg.text ?? '', decision.tier);
           log.info(

@@ -53,15 +53,24 @@ export function globalDefaultMode(env: NodeJS.ProcessEnv = process.env): QueueMo
 }
 
 /**
- * Owner-interrupt (owner directive 2026-08-17): the OWNER's newest message
- * preempts a running loop immediately (abort + restart) instead of being steered
- * into it or queued behind it — so a long autonomous loop never buries the
- * owner's current instruction. On by default; set SUDO_OWNER_INTERRUPTS=0 to
- * restore the per-session queue-mode behaviour for owner messages too. Only the
- * OWNER tier may interrupt — an untrusted message can never abort an owner's run.
+ * How the OWNER's message is handled when it arrives DURING an active run
+ * (owner directive 2026-08-17). Only the owner tier is ever treated specially;
+ * an untrusted message can never interrupt or spawn a concurrent run.
+ *
+ *  - 'concurrent' (DEFAULT): keep the running task going in the BACKGROUND and
+ *    answer the new message in parallel on a side session — the owner gets a
+ *    reply without interrupting the ongoing work.
+ *  - 'interrupt': abort the running loop and run the new message instead.
+ *  - 'queue': fall back to the configured per-session queue mode (steer/followup).
+ *
+ * Selected by SUDO_OWNER_MIDRUN; legacy SUDO_OWNER_INTERRUPTS=0 maps to 'queue'.
  */
-export function ownerInterruptsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env['SUDO_OWNER_INTERRUPTS'] !== '0';
+export type OwnerMidRunMode = 'concurrent' | 'interrupt' | 'queue';
+export function ownerMidRunMode(env: NodeJS.ProcessEnv = process.env): OwnerMidRunMode {
+  const raw = (env['SUDO_OWNER_MIDRUN'] ?? '').trim().toLowerCase();
+  if (raw === 'interrupt' || raw === 'concurrent' || raw === 'queue') return raw;
+  if (env['SUDO_OWNER_INTERRUPTS'] === '0') return 'queue'; // legacy opt-out
+  return 'concurrent';
 }
 
 /**
@@ -89,11 +98,12 @@ export interface QueueModeDecisionInput {
   /** Trust tier of the incoming message. */
   msgTier: SteerTier;
   /**
-   * When true, an OWNER-tier message interrupts the active run (abort + restart)
-   * regardless of the configured mode. Computed by the caller from
-   * {@link ownerInterruptsEnabled}. Never lets an untrusted message interrupt.
+   * How to treat an OWNER-tier message during an active run (computed by the
+   * caller from {@link ownerMidRunMode}). 'concurrent' → answer in parallel while
+   * the run continues; 'interrupt' → abort + run new; 'queue'/undefined → use the
+   * configured queue mode. Never applies to untrusted messages.
    */
-  ownerInterrupts?: boolean;
+  ownerMidRun?: OwnerMidRunMode;
 }
 
 export type QueueModeDecision =
@@ -101,7 +111,8 @@ export type QueueModeDecision =
   | { action: 'steer'; tier: SteerTier }          // inject into the active run
   | { action: 'followup' }                         // queue a new turn
   | { action: 'collect' }                          // coalesce in a quiet window
-  | { action: 'interrupt' };                        // abort + restart
+  | { action: 'interrupt' }                         // abort + restart
+  | { action: 'concurrent' };                       // answer in parallel; run keeps going
 
 /**
  * Decide how to handle an inbound message given the session's mode + context.
@@ -118,11 +129,11 @@ export function decideQueueMode(input: QueueModeDecisionInput): QueueModeDecisio
   // Media never steers — keep the attachment attached to its own turn.
   if (input.isMedia) return { action: 'followup' };
 
-  // Owner-interrupt: the owner's newest message preempts any running loop
-  // immediately. Only the owner tier may interrupt (an untrusted message never
-  // aborts an owner's run). Takes precedence over the configured queue mode.
-  if (input.ownerInterrupts && input.msgTier === 'owner') {
-    return { action: 'interrupt' };
+  // Owner mid-run handling takes precedence over the configured queue mode, but
+  // only for the OWNER tier (an untrusted message never interrupts or spawns a
+  // concurrent run — it falls through to the tier-guarded mode handling).
+  if (input.msgTier === 'owner' && input.ownerMidRun && input.ownerMidRun !== 'queue') {
+    return input.ownerMidRun === 'interrupt' ? { action: 'interrupt' } : { action: 'concurrent' };
   }
 
   switch (input.mode) {

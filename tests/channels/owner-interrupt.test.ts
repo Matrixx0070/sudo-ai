@@ -1,8 +1,9 @@
 /**
  * @file tests/channels/owner-interrupt.test.ts
- * @description Owner-interrupt: the owner's newest message preempts a running
- * loop immediately (abort + run the new message), instead of steering it into
- * the old loop or queueing behind it. Untrusted messages never interrupt.
+ * @description Owner mid-run handling. DEFAULT = concurrent: the owner's 2nd
+ * message is answered in the BACKGROUND on a side session while the running task
+ * keeps going (no interrupt). SUDO_OWNER_MIDRUN=interrupt restores abort+restart.
+ * Untrusted messages never interrupt or spawn a concurrent run.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -20,24 +21,25 @@ function ownerMsg(text: string): UnifiedMessage {
 function strangerMsg(text: string): UnifiedMessage {
   return { id: Math.random().toString(36).slice(2), channel: 'signal', peerId: 'owner1', text, isOwner: false } as UnifiedMessage;
 }
-const SESSION_ID = 'sess1';
+const MAIN_SESSION = 'sess:owner1';
 
-interface Harness { handler: (m: UnifiedMessage) => Promise<void>; runTexts: string[]; sent: string[]; aborts: Array<{ sid: string; reason: string }>; releaseFirst: () => void; }
+interface Harness { handler: (m: UnifiedMessage) => Promise<void>; runs: Array<{ sid: string; text: string }>; sent: string[]; aborts: Array<{ sid: string; reason: string }>; releaseFirst: () => void; }
 
 function harness(): Harness {
-  const runTexts: string[] = [];
+  const runs: Array<{ sid: string; text: string }> = [];
   const sent: string[] = [];
   const aborts: Array<{ sid: string; reason: string }> = [];
   let firstResolve: (() => void) | null = null;
   const releaseFirst = () => firstResolve?.();
   let call = 0;
   const deps: GatewayTurnDeps = {
-    sessionManager: { getOrCreate: async () => ({ id: SESSION_ID }), appendEvent: async () => {}, peerQueue: new KeyedAsyncQueue() },
+    // Session id follows the peer key so a "#side" session differs from the main one.
+    sessionManager: { getOrCreate: async (_ch: string, peer: string) => ({ id: `sess:${peer}` }), appendEvent: async () => {}, peerQueue: new KeyedAsyncQueue() },
     agentLoop: {
-      run: vi.fn((_sid: string, text: string) => {
-        runTexts.push(text);
+      run: vi.fn((sid: string, text: string) => {
+        runs.push({ sid, text });
         call++;
-        if (call === 1) return new Promise<{ text?: string }>((res) => { firstResolve = () => res({ text: `A-done` }); });
+        if (call === 1) return new Promise<{ text?: string }>((res) => { firstResolve = () => res({ text: 'A-done' }); });
         return Promise.resolve({ text: `answer:${text}` });
       }) as never,
     },
@@ -45,11 +47,9 @@ function harness(): Harness {
     send: async (_m, text) => { sent.push(text); },
     journal: false,
     serialize: false,
-    // The abort seam the loop honours — here it also releases the hung first run
-    // to model the loop stopping at its next boundary.
     abortRun: (sid, reason) => { aborts.push({ sid, reason }); releaseFirst(); },
   };
-  return { handler: createGatewayTurnHandler(deps), runTexts, sent, aborts, releaseFirst };
+  return { handler: createGatewayTurnHandler(deps), runs, sent, aborts, releaseFirst };
 }
 
 beforeEach(() => {
@@ -58,75 +58,65 @@ beforeEach(() => {
   __resetQueueModeStoreForTest();
   process.env['SUDO_MIDRUN_STEER'] = '1';
   process.env['SUDO_QUEUE_MODE_DEFAULT'] = 'steer';
-  delete process.env['SUDO_OWNER_INTERRUPTS'];
+  delete process.env['SUDO_OWNER_MIDRUN'];
 });
 afterEach(() => {
   delete process.env['SUDO_MIDRUN_STEER'];
   delete process.env['SUDO_QUEUE_MODE_DEFAULT'];
-  delete process.env['SUDO_OWNER_INTERRUPTS'];
+  delete process.env['SUDO_OWNER_MIDRUN'];
   vi.restoreAllMocks();
 });
 
-describe('owner-interrupt', () => {
-  it('an owner message aborts the active run and runs the new message', async () => {
+describe('owner mid-run — default concurrent', () => {
+  it('answers the 2nd owner message in the background WITHOUT interrupting the running task', async () => {
     const h = harness();
-    const p1 = h.handler(ownerMsg('long autonomous loop'));
+    const p1 = h.handler(ownerMsg('long autonomous task')); // main run, hangs
     await tick();
-    // Second owner message arrives mid-run.
-    const p2 = h.handler(ownerMsg('stop and take a screenshot'));
-    await Promise.all([p1, p2]);
+    const p2 = h.handler(ownerMsg('quick question')); // arrives mid-run
+    await p2; // concurrent branch returns immediately after firing the side answer
     await tick(30);
 
-    // The run was interrupted (abort signalled for the active session)…
-    expect(h.aborts.length).toBe(1);
-    expect(h.aborts[0]).toMatchObject({ sid: SESSION_ID });
-    // …and the new owner message ran and was answered (not steered/buffered).
-    expect(h.runTexts).toContain('stop and take a screenshot');
-    expect(h.sent).toContain('answer:stop and take a screenshot');
-    // The owner immediately got an interrupt acknowledgement, before the answer.
-    expect(h.sent).toContain(INTERRUPT_ACK_TEXT);
-    expect(h.sent.indexOf(INTERRUPT_ACK_TEXT)).toBeLessThan(h.sent.indexOf('answer:stop and take a screenshot'));
-    // It did NOT go into the steer buffer.
-    expect(getSteerBuffer().size(SESSION_ID)).toBe(0);
+    // The running task was NOT interrupted…
+    expect(h.aborts.length).toBe(0);
+    // …the quick question was answered on a SEPARATE side session…
+    expect(h.runs.some((r) => r.text === 'quick question' && r.sid === 'sess:owner1#side')).toBe(true);
+    expect(h.sent).toContain('answer:quick question');
+    // …and it was NOT steered into the main run.
+    expect(getSteerBuffer().size(MAIN_SESSION)).toBe(0);
+    // The main run is still going; release it so the test ends cleanly.
+    h.releaseFirst();
+    await p1;
   });
 
-  it('SUDO_OWNER_INTERRUPT_ACK=0 suppresses the ack but still interrupts', async () => {
-    process.env['SUDO_OWNER_INTERRUPT_ACK'] = '0';
+  it('an UNTRUSTED mid-run message does NOT get a concurrent run (tier-guarded)', async () => {
+    const h = harness();
+    const p1 = h.handler(ownerMsg('owner task'));
+    await tick();
+    await h.handler(strangerMsg('stranger question'));
+    await tick(20);
+    // No interrupt, and no CONCURRENT side-session run for the untrusted message
+    // (it is handled by the normal tier-guarded followup path, not the owner lane).
+    expect(h.aborts.length).toBe(0);
+    expect(h.runs.some((r) => r.sid === 'sess:owner1#side')).toBe(false);
+    h.releaseFirst();
+    await p1;
+  });
+});
+
+describe('owner mid-run — SUDO_OWNER_MIDRUN=interrupt', () => {
+  beforeEach(() => { process.env['SUDO_OWNER_MIDRUN'] = 'interrupt'; });
+
+  it('aborts the running task and runs the new message, with an interrupt ack', async () => {
     const h = harness();
     const p1 = h.handler(ownerMsg('long task'));
     await tick();
-    const p2 = h.handler(ownerMsg('reply now'));
+    const p2 = h.handler(ownerMsg('do this instead'));
     await Promise.all([p1, p2]);
     await tick(30);
-    expect(h.aborts.length).toBe(1); // still interrupted
-    expect(h.sent).not.toContain(INTERRUPT_ACK_TEXT); // but no ack
-    delete process.env['SUDO_OWNER_INTERRUPT_ACK'];
-  });
-
-  it('an UNTRUSTED message does NOT interrupt an owner run (steer tier guard → followup)', async () => {
-    const h = harness();
-    const p1 = h.handler(ownerMsg('owner long task'));
-    await tick();
-    const p2 = h.handler(strangerMsg('please stop everything'));
-    // The stranger message must not abort the owner's run.
-    await tick();
-    expect(h.aborts.length).toBe(0);
-    // Release the first run so the test completes cleanly.
-    h.releaseFirst();
-    await Promise.all([p1, p2]);
-  });
-
-  it('with SUDO_OWNER_INTERRUPTS=0 the owner message steers instead of interrupting', async () => {
-    process.env['SUDO_OWNER_INTERRUPTS'] = '0';
-    const h = harness();
-    const p1 = h.handler(ownerMsg('owner long task'));
-    await tick();
-    const p2 = h.handler(ownerMsg('extra context'));
-    await tick();
-    // No abort; the message was steered into the buffer for the running loop.
-    expect(h.aborts.length).toBe(0);
-    expect(getSteerBuffer().size(SESSION_ID)).toBe(1);
-    h.releaseFirst();
-    await Promise.all([p1, p2]);
+    expect(h.aborts.length).toBe(1);
+    expect(h.aborts[0]).toMatchObject({ sid: MAIN_SESSION });
+    expect(h.sent).toContain(INTERRUPT_ACK_TEXT);
+    expect(h.runs.some((r) => r.text === 'do this instead')).toBe(true);
+    expect(h.sent).toContain('answer:do this instead');
   });
 });

@@ -12,7 +12,7 @@ import { SteerBuffer, minTier, COALESCE_MAX_CHARS } from '../../src/core/agent/s
 import {
   decideQueueMode,
   globalDefaultMode,
-  ownerInterruptsEnabled,
+  ownerMidRunMode,
   QueueModeStore,
 } from '../../src/core/channels/queue-modes.js';
 
@@ -132,35 +132,43 @@ describe('GW-5 decideQueueMode', () => {
     expect(decideQueueMode({ ...base, mode: 'followup' }).action).toBe('followup');
   });
 
-  it('OWNER-INTERRUPT: an owner message preempts the run regardless of mode', () => {
+  it('OWNER concurrent: an owner message → concurrent regardless of configured mode', () => {
     for (const mode of ['steer', 'followup', 'collect'] as const) {
-      const d = decideQueueMode({ ...base, mode, msgTier: 'owner', ownerInterrupts: true });
-      expect(d.action).toBe('interrupt');
+      const d = decideQueueMode({ ...base, mode, msgTier: 'owner', ownerMidRun: 'concurrent' });
+      expect(d.action).toBe('concurrent');
     }
   });
 
-  it('OWNER-INTERRUPT: an UNTRUSTED message never interrupts (falls back to normal mode handling)', () => {
-    // untrusted + steer mode + owner run → tier guard reroutes to followup, NOT interrupt.
-    const d = decideQueueMode({ ...base, mode: 'steer', runTier: 'owner', msgTier: 'untrusted', ownerInterrupts: true });
-    expect(d.action).toBe('followup');
+  it('OWNER interrupt: ownerMidRun=interrupt → interrupt regardless of mode', () => {
+    const d = decideQueueMode({ ...base, mode: 'steer', msgTier: 'owner', ownerMidRun: 'interrupt' });
+    expect(d.action).toBe('interrupt');
   });
 
-  it('OWNER-INTERRUPT: disabled → owner message follows the configured mode (steer)', () => {
-    const d = decideQueueMode({ ...base, mode: 'steer', msgTier: 'owner', ownerInterrupts: false });
+  it('OWNER mid-run: an UNTRUSTED message never interrupts/concurrent-runs (tier guard → followup)', () => {
+    for (const m of ['concurrent', 'interrupt'] as const) {
+      const d = decideQueueMode({ ...base, mode: 'steer', runTier: 'owner', msgTier: 'untrusted', ownerMidRun: m });
+      expect(d.action).toBe('followup');
+    }
+  });
+
+  it('OWNER mid-run: "queue" → owner message follows the configured mode (steer)', () => {
+    const d = decideQueueMode({ ...base, mode: 'steer', msgTier: 'owner', ownerMidRun: 'queue' });
     expect(d.action).toBe('steer');
   });
 
-  it('OWNER-INTERRUPT: media from owner still never steers/interrupts (followup)', () => {
-    const d = decideQueueMode({ ...base, isMedia: true, msgTier: 'owner', ownerInterrupts: true });
+  it('OWNER mid-run: media from owner still never interrupts/concurrent (followup)', () => {
+    const d = decideQueueMode({ ...base, isMedia: true, msgTier: 'owner', ownerMidRun: 'concurrent' });
     expect(d.action).toBe('followup');
   });
 });
 
-describe('ownerInterruptsEnabled flag', () => {
-  it('defaults ON; only SUDO_OWNER_INTERRUPTS=0 disables', () => {
-    expect(ownerInterruptsEnabled({})).toBe(true);
-    expect(ownerInterruptsEnabled({ SUDO_OWNER_INTERRUPTS: '1' })).toBe(true);
-    expect(ownerInterruptsEnabled({ SUDO_OWNER_INTERRUPTS: '0' })).toBe(false);
+describe('ownerMidRunMode', () => {
+  it('defaults to concurrent; honors SUDO_OWNER_MIDRUN; legacy SUDO_OWNER_INTERRUPTS=0 → queue', () => {
+    expect(ownerMidRunMode({})).toBe('concurrent');
+    expect(ownerMidRunMode({ SUDO_OWNER_MIDRUN: 'interrupt' })).toBe('interrupt');
+    expect(ownerMidRunMode({ SUDO_OWNER_MIDRUN: 'queue' })).toBe('queue');
+    expect(ownerMidRunMode({ SUDO_OWNER_MIDRUN: 'bogus' })).toBe('concurrent');
+    expect(ownerMidRunMode({ SUDO_OWNER_INTERRUPTS: '0' })).toBe('queue');
   });
 });
 
