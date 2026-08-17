@@ -97,6 +97,19 @@ second half of the directive ("react only to the owner's command"):
 | Non-owner chat peer, pairing-admitted user | no — containment holds |
 | Cron, webhooks, remote workers, MCP callers, anything unattributed | no — containment holds |
 
+### Which channels can confer owner status
+
+| channel | owner when | notes |
+|---|---|---|
+| Telegram | sender id is in the constructor allowlist (`TELEGRAM_CHAT_ID`) | pairing-admitted peers are admitted but never owners |
+| Web chat | the request/connection proves `WEB_CHAT_TOKEN` | loopback/LAN admission is not ownership |
+| everything else (Discord, email, Slack, WhatsApp, Signal, Matrix, IRC, cron, webhooks, remote workers, MCP) | never | no owner stamp → `isOwner` undefined → treated as non-owner |
+
+Fail-closed by construction: an adapter that does not explicitly stamp
+`isOwner` cannot grant god mode. Adding owner support to a new channel is a
+deliberate act — stamp `UnifiedMessage.isOwner` from an authenticated peer
+check, never from anything the sender controls.
+
 `ownerVerified` is threaded from the channel adapter's authenticated peer check
 (`ToolContext.isOwner`), never from anything the model can set. On Telegram
 that resolves to the constructor allowlist (`TELEGRAM_CHAT_ID`) — pairing-
