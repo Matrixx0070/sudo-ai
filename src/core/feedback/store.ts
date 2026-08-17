@@ -74,9 +74,8 @@ export function detectTaskType(summary: string): string {
 // Write
 // ---------------------------------------------------------------------------
 
-export function saveFeedback(entry: Omit<FeedbackEntry, 'id' | 'created_at'>): string {
+export function saveFeedback(entry: Omit<FeedbackEntry, 'id' | 'created_at'>, id: string = randomUUID()): string {
   const db = getDb();
-  const id = randomUUID();
   try {
     db.prepare(`
       INSERT INTO feedback (id, session_id, channel, task_summary, task_type, rating, notes)
@@ -87,6 +86,31 @@ export function saveFeedback(entry: Omit<FeedbackEntry, 'id' | 'created_at'>): s
     db.close();
   }
   return id;
+}
+
+/**
+ * Resolve a pending feedback row to its final rating IN PLACE, preserving the
+ * task_summary and task_type captured at pre-save. This is how a 👍/👎 tap is
+ * recorded — NOT a fresh insert. Returns true if a row with this id existed.
+ *
+ * Before this existed the rating callback inserted a synthetic
+ * `rating-update:<uuid>` / task_type='general' row (the button id never matched
+ * any real row — see keyboard.ts), so every rating destroyed its task context
+ * and polluted the self-improvement signal with meaningless "general 80% bad"
+ * noise. Updating by id keeps the real task attached to the owner's verdict.
+ */
+export function updateFeedbackRating(feedbackId: string, rating: Rating, notes?: string): boolean {
+  const db = getDb();
+  try {
+    const res = db.prepare(
+      `UPDATE feedback SET rating = @rating${notes !== undefined ? ', notes = @notes' : ''} WHERE id = @id`,
+    ).run({ id: feedbackId, rating, notes: notes ?? null });
+    const matched = res.changes > 0;
+    log.info({ feedbackId, rating, matched }, matched ? 'Feedback rating resolved in place' : 'Feedback rating: no row matched id');
+    return matched;
+  } finally {
+    db.close();
+  }
 }
 
 export function addNoteToFeedback(feedbackId: string, notes: string): void {

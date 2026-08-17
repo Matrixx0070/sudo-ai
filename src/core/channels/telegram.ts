@@ -13,7 +13,7 @@
 
 import { Bot, type Context, GrammyError, InputFile, InputMediaBuilder, InlineKeyboard } from 'grammy';
 import type { Update as TelegramUpdate } from 'grammy/types';
-import { saveFeedback, addNoteToFeedback } from '../feedback/store.js';
+import { saveFeedback, addNoteToFeedback, updateFeedbackRating } from '../feedback/store.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATA_DIR } from '../shared/paths.js';
@@ -1086,15 +1086,21 @@ export class TelegramAdapter implements ChannelAdapter {
       }
 
       try {
-        // Update the pre-saved record from 'skip' to the actual rating
-        saveFeedback({
-          session_id: feedbackId, // use feedbackId as lookup key via notes
-          channel: 'telegram',
-          task_summary: `rating-update:${feedbackId}`,
-          task_type: 'general',
-          rating,
-          notes: `updated from callback: ${feedbackId}`,
-        });
+        // Resolve the pre-saved row (id == feedbackId) from 'skip' to the real
+        // rating IN PLACE, preserving its captured task_summary/task_type. If no
+        // row matches (legacy button minted before the id-linkage fix, or an
+        // aged-out row), fall back to a labelled insert so the tap is not lost.
+        const resolved = updateFeedbackRating(feedbackId, rating);
+        if (!resolved) {
+          saveFeedback({
+            session_id: feedbackId,
+            channel: 'telegram',
+            task_summary: `rating-orphan:${feedbackId}`,
+            task_type: 'general',
+            rating,
+            notes: `no pre-saved row for callback: ${feedbackId}`,
+          });
+        }
 
         // TX2 (SUDO_TG_BAD_REGEN=1): an owner 👎 swaps in the one-tap reason
         // keyboard (Wrong / Too long / Missed the point / Skip reasons) instead

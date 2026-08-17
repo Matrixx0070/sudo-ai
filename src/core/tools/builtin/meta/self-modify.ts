@@ -379,6 +379,22 @@ function doBuild(): ToolResult {
   if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
     return { success: false, output: 'meta.self-modify build is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
   }
+  // TYPECHECK FIRST. `npm run build` is esbuild, which strips types and never
+  // typechecks — so a self-modification with a wrong import path or type error
+  // used to report "Build succeeded" and restart into broken code (pm2 runs via
+  // tsx from source, so it even "works" at runtime while shipping type errors).
+  // `tsc --noEmit` (npm run lint) is the only real correctness gate; run it as
+  // the authoritative check before the esbuild bundle.
+  logger.info('Typechecking (tsc --noEmit)');
+  const tscOut = run('npm run lint 2>&1', 180_000);
+  if (tscOut.includes('error TS')) {
+    logMod('build', 'FAILED (typecheck)');
+    return {
+      success: false,
+      output: `Build FAILED — typecheck (tsc --noEmit) found errors. Self-modify will NOT ship type-broken code:\n${trim(tscOut)}`,
+      data: { stage: 'typecheck', buildOutput: tscOut },
+    };
+  }
   logger.info('Running npm build');
   const output = run('npm run build 2>&1', 120_000);
   const success = !output.includes('error TS') && !output.includes('Build failed');
@@ -386,7 +402,7 @@ function doBuild(): ToolResult {
   return {
     success,
     output: success
-      ? `Build succeeded.\n${trim(output)}`
+      ? `Build succeeded (typecheck clean).\n${trim(output)}`
       : `Build FAILED:\n${trim(output)}`,
     data: { buildOutput: output },
   };

@@ -9,7 +9,6 @@
  */
 
 import { InlineKeyboard } from 'grammy';
-import { randomUUID } from 'node:crypto';
 import { saveFeedback, detectTaskType } from './store.js';
 
 export interface PendingFeedback {
@@ -30,11 +29,13 @@ export function createFeedbackKeyboard(
   taskSummary: string,
   channel = 'telegram',
 ): PendingFeedback {
-  const feedbackId = randomUUID();
   const taskType   = detectTaskType(taskSummary);
 
-  // Pre-save with rating=skip so we have a record even if the owner never taps
-  saveFeedback({
+  // Pre-save with rating=skip so we have a record even if the owner never taps.
+  // The button feedbackId MUST be the persisted row id — otherwise a rating tap
+  // can never resolve to this row (the old code minted a separate UUID for the
+  // buttons, so every tap orphaned into a synthetic 'rating-update' row).
+  const feedbackId = saveFeedback({
     session_id:   sessionId,
     channel,
     task_summary: taskSummary.slice(0, 200),

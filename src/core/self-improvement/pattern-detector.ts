@@ -123,6 +123,10 @@ export function detectPatterns(windowDays = 14): DetectedPatterns {
     ).get();
 
     if (feedbackExists) {
+      // Exclude synthetic bookkeeping rows (rating-update/rating-orphan/regen-*
+      // markers) — they carry no real task context and, before the feedback
+      // linkage was fixed, they were the ONLY rated rows, poisoning every
+      // learning with meaningless "general 80% bad" noise.
       const fbRows = db.prepare(`
         SELECT task_type,
                SUM(CASE WHEN rating='good' THEN 1 ELSE 0 END) as good,
@@ -130,6 +134,9 @@ export function detectPatterns(windowDays = 14): DetectedPatterns {
                GROUP_CONCAT(CASE WHEN rating='bad' THEN substr(task_summary,1,80) END, '|||') as bad_samples
         FROM feedback
         WHERE created_at >= ?
+          AND task_summary NOT LIKE 'rating-update:%'
+          AND task_summary NOT LIKE 'rating-orphan:%'
+          AND task_summary NOT LIKE 'regen-%'
         GROUP BY task_type
         HAVING (good + bad) >= 2
         ORDER BY bad DESC
