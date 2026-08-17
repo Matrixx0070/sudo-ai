@@ -1,9 +1,11 @@
 /**
  * @file tests/channels/gw5-steer-runend-clear.test.ts
- * @description GW-5 MEDIUM-1: a steer that lands after the loop's final drain but
- * before run-end must NOT leak into the next run for the same session. The turn
- * handler's finally clears the session's steer buffer, so a subsequent unrelated
- * run starts with an empty buffer.
+ * @description GW-5 MEDIUM-1 (updated): a steer that lands after the loop's final
+ * drain but before run-end must NOT silently vanish, and must NOT leak into the
+ * next unrelated run as an injected steer. The turn handler now RE-DELIVERS it as
+ * its own fresh turn — so the owner's mid-run message is always followed and
+ * answered (fixes the "bot ignores the current message and keeps running the old
+ * loop" bug), while the steer buffer is left empty for the next run.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -28,16 +30,19 @@ function msg(text: string): UnifiedMessage {
 
 const SESSION_ID = 'sess1';
 
-function makeDeps(runImpl: () => Promise<{ text?: string }>): GatewayTurnDeps {
+function makeDeps(
+  runImpl: (sessionId: string, text: string) => Promise<{ text?: string }>,
+  sent: string[],
+): GatewayTurnDeps {
   return {
     sessionManager: {
       getOrCreate: async () => ({ id: SESSION_ID }),
       appendEvent: async () => {},
       peerQueue: new KeyedAsyncQueue(),
     },
-    agentLoop: { run: vi.fn(runImpl) as never },
+    agentLoop: { run: vi.fn((sid: string, text: string) => runImpl(sid, text)) as never },
     runGenerations: { current: () => 0, isStale: () => false },
-    send: async () => {},
+    send: async (_m, text) => { sent.push(text); },
     journal: false,
   };
 }
@@ -53,28 +58,50 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('GW-5 run-end steer clear (MEDIUM-1)', () => {
-  it('a steer buffered during a run that ends is NOT carried into the next run', async () => {
+describe('GW-5 run-end orphaned steer → re-delivered as a fresh turn (never dropped)', () => {
+  it('re-delivers an orphaned mid-run message as its own turn and answers it', async () => {
     const d = deferred();
-    const handler = createGatewayTurnHandler(makeDeps(() => d.promise));
+    const runTexts: string[] = [];
+    const sent: string[] = [];
+    let call = 0;
+    const handler = createGatewayTurnHandler(
+      makeDeps((_sid, text) => {
+        runTexts.push(text);
+        call++;
+        // First run (the "old loop") hangs so the steer lands mid-run; the
+        // re-delivered turn resolves immediately.
+        return call === 1 ? d.promise : Promise.resolve({ text: `answer:${text}` });
+      }, sent),
+    );
 
-    // Run A starts and hangs.
+    // Run A starts and hangs (the long "old loop").
     const runA = handler(msg('long task'));
     await tick();
 
-    // A steer lands mid-run — simulate the race where it slips in after the loop's
-    // final drain but before run-end by pushing directly into the buffer for the
-    // active session.
-    getSteerBuffer().push(SESSION_ID, 'orphaned steer', 'owner');
+    // A message lands mid-run and slips past the loop's final drain (simulated by
+    // pushing directly into the active session's steer buffer).
+    getSteerBuffer().push(SESSION_ID, 'take a screenshot', 'owner');
     expect(getSteerBuffer().size(SESSION_ID)).toBe(1);
 
-    // Run A completes → finally clears the buffer.
+    // Run A completes → finally re-delivers the orphaned message as a new turn.
     d.resolve({ text: 'A done' });
     await runA;
+    await tick(40); // let the re-delivered turn drain off the peer queue
 
-    // The orphaned steer was discarded, not carried forward.
+    // Buffer is empty (drained, not left to leak into the next run).
     expect(getSteerBuffer().size(SESSION_ID)).toBe(0);
-    // A subsequent unrelated run therefore drains nothing.
-    expect(getSteerBuffer().drain(SESSION_ID)).toEqual([]);
+    // The orphaned message was RE-DELIVERED as its own turn (not discarded)…
+    expect(runTexts).toContain('take a screenshot');
+    // …and answered.
+    expect(sent).toContain('answer:take a screenshot');
+  });
+
+  it('does nothing when there is no orphaned message', async () => {
+    const sent: string[] = [];
+    const handler = createGatewayTurnHandler(makeDeps(async (_sid, _t) => ({ text: 'ok' }), sent));
+    await handler(msg('hello'));
+    await tick(30);
+    expect(getSteerBuffer().size(SESSION_ID)).toBe(0);
+    expect(sent).toEqual(['ok']); // exactly one turn, no phantom re-delivery
   });
 });

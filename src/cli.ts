@@ -2691,10 +2691,28 @@ ${question}`, kb);
             }
             if (steerSessionId !== null && process.env['SUDO_MIDRUN_STEER'] === '1') {
               const buf = getSteerBuffer();
-              const orphaned = buf.size(steerSessionId);
-              if (orphaned > 0) {
-                buf.clear(steerSessionId);
-                log.debug({ peerId: msg.peerId, discarded: orphaned }, 'TX1/GW-5: discarded orphaned steer(s) at run end');
+              const orphaned = buf.drain(steerSessionId);
+              if (orphaned.length > 0) {
+                // The loop never drained these mid-run steers. That happens when
+                // the message arrived after the loop's final iteration boundary,
+                // OR — the real bug — the run's session FORKED (long runs fork
+                // when context fills; loop.ts reassigns state.sessionId): the
+                // loop then drains the steer buffer under the NEW sessionId while
+                // the producer pushed under the ORIGINAL one (the RunRegistry key
+                // is never updated on fork). Either way the owner's message was
+                // never seen. Do NOT discard it — re-deliver it as its own turn
+                // so the current message is always followed and answered instead
+                // of being lost while the old loop runs on. Fire-and-forget: it
+                // queues behind the ending run on the per-peer queue.
+                const text = orphaned.map((s) => s.text).join('\n');
+                log.info(
+                  { peerId: msg.peerId, count: orphaned.length },
+                  'TX1/GW-5: re-delivering orphaned mid-run message(s) as a fresh turn (never dropped)',
+                );
+                const followup: UnifiedMessage = { ...msg, text, media: undefined };
+                void deliverUserTurn(followup).catch((err: unknown) =>
+                  log.error({ err: String(err), peerId: msg.peerId }, 'Re-delivered mid-run turn failed'),
+                );
               }
             }
           }

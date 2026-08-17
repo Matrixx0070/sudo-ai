@@ -179,15 +179,32 @@ export function createGatewayTurnHandler(deps: GatewayTurnDeps): MessageHandler 
       requestMissionWake('user-idle');
       if (laneRelease) laneRelease();
       getRunRegistry().endRun(convKey);
-      // MEDIUM-1: drop any steer that landed after the loop's final iteration-boundary
-      // drain but before run-end — otherwise it would be injected into the NEXT run for
-      // this session (mis-delivery). Log the discarded count so the drop is observable.
+      // MEDIUM-1: a steer that the loop never drained (arrived after the loop's
+      // final iteration boundary, OR the run's session forked so the loop drained
+      // a different sessionId than the producer pushed — see the Telegram path in
+      // cli.ts for the full rationale). Do NOT discard the owner's message — that
+      // silently loses the current message while the old loop runs on. Re-deliver
+      // it as its own turn so it is always followed and answered. Fire-and-forget;
+      // it queues behind the ending run on the per-peer queue.
       if (steerSessionId !== null && process.env['SUDO_MIDRUN_STEER'] === '1') {
         const buf = getSteerBuffer();
-        const orphaned = buf.size(steerSessionId);
-        if (orphaned > 0) {
-          buf.clear(steerSessionId);
-          log.debug({ channel: msg.channel, peerId: msg.peerId, discarded: orphaned }, 'GW-5: discarded orphaned steer(s) at run end (not carried into next run)');
+        const orphaned = buf.drain(steerSessionId);
+        if (orphaned.length > 0) {
+          const text = orphaned.map((s) => s.text).join('\n');
+          log.info(
+            { channel: msg.channel, peerId: msg.peerId, count: orphaned.length },
+            'GW-5: re-delivering orphaned mid-run message(s) as a fresh turn (never dropped)',
+          );
+          const followup: UnifiedMessage = { ...msg, text, media: undefined };
+          if (serialize) {
+            void deps.sessionManager.peerQueue.enqueue(msg.peerId, () => runTurn(followup)).catch((err) =>
+              log.error({ err: String(err), channel: msg.channel, peerId: msg.peerId }, 'Re-delivered mid-run turn failed'),
+            );
+          } else {
+            void runTurn(followup).catch((err) =>
+              log.error({ err: String(err), channel: msg.channel, peerId: msg.peerId }, 'Re-delivered mid-run turn failed'),
+            );
+          }
         }
       }
     }
