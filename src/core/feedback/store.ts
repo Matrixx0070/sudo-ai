@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { DATA_DIR } from '../shared/paths.js';
+import { normalizeBrainText, type ToolBrain } from '../brain/brain-text.js';
 
 const log = createLogger('feedback:store');
 
@@ -55,19 +56,82 @@ function getDb(): Database.Database {
 }
 
 // ---------------------------------------------------------------------------
-// Detect task type from summary text
+// Task-type classification
+//
+// task_type is a grouping key consumed only at ANALYSIS time (the self-improve
+// pattern-detector and the meta.feedback tool) — never on the hot path. So the
+// capture-time label uses a fast, deterministic heuristic, and a model-based
+// refinement (classifyTaskTypeLLM) can upgrade it later where a brain exists.
 // ---------------------------------------------------------------------------
 
-export function detectTaskType(summary: string): string {
+/** The single source of truth for task categories (heuristic + LLM share it). */
+export const TASK_CATEGORIES = [
+  'youtube', 'coding', 'research', 'media', 'system', 'scheduling', 'communication', 'general',
+] as const;
+export type TaskCategory = (typeof TASK_CATEGORIES)[number];
+
+// Word-boundary keyword sets per category. Iteration order is the tie-breaker
+// when two categories score equally (first wins), so more-specific buckets come
+// before broad ones. Scoring (count of DISTINCT keyword hits) replaces the old
+// ordered if-chain, whose first branch greedily won — e.g. "fix the build
+// script" matched youtube on "script" before coding ever got a look.
+const CATEGORY_KEYWORDS: Array<{ category: TaskCategory; words: RegExp[] }> = [
+  { category: 'youtube', words: [/\byoutube\b/, /\bvideos?\b/, /\bthumbnails?\b/, /\bshorts?\b/, /\bremotion\b/, /\bchannel\b/, /\buploads?\b/, /\bscript\b/] },
+  { category: 'media', words: [/\bimages?\b/, /\bphotos?\b/, /\bpictures?\b/, /\bgenerate\b/, /\brender\b/, /\blogo\b/, /\bavatar\b/] },
+  { category: 'coding', words: [/\bcode\b/, /\bfix(es|ed|ing)?\b/, /\bbugs?\b/, /\bbuild(s|ing)?\b/, /\bdeploy(s|ed|ing|ment)?\b/, /\btools?\b/, /\bskills?\b/, /\btypescript\b/, /\bnpm\b/, /\brefactor\b/, /\bcompile\b/, /\btests?\b/, /\berrors?\b/, /\bfunctions?\b/, /\bcommit\b/, /\bpull request\b/, /\bpr\b/] },
+  { category: 'scheduling', words: [/\bschedules?\b/, /\bscheduled\b/, /\bcron\b/, /\breminders?\b/, /\brecurring\b/, /\bdaily\b/, /\bweekly\b/, /\bevery day\b/] },
+  { category: 'research', words: [/\bsearch\b/, /\bresearch\b/, /\bfind\b/, /\btrend(s|ing)?\b/, /\bnews\b/, /\btopics?\b/, /\banalyse\b/, /\banalyze\b/, /\binvestigate\b/, /\bcompare\b/, /\blook up\b/] },
+  { category: 'communication', words: [/\bemails?\b/, /\btelegram\b/, /\bnotify\b/, /\bmessages?\b/, /\bsend\b/, /\breply\b/, /\bslack\b/, /\bdiscord\b/, /\bdm\b/] },
+  { category: 'system', words: [/\bhealth\b/, /\bstatus\b/, /\bdiagnostics?\b/, /\bmonitor(s|ing)?\b/, /\buptime\b/, /\brestart\b/, /\bpm2\b/, /\bsystem\b/, /\blogs?\b/, /\bmemory\b/, /\bdisk\b/, /\bcpu\b/] },
+];
+
+/**
+ * Fast, deterministic task-type classifier. Scores each category by the number
+ * of distinct keyword hits and returns the highest; ties break by declaration
+ * order (more-specific first). Zero-latency and side-effect-free — safe for the
+ * hot path. Returns 'general' when nothing matches.
+ */
+export function detectTaskType(summary: string): TaskCategory {
   const s = summary.toLowerCase();
-  if (/video|youtube|script|thumbnail|short|upload|remotion/.test(s))  return 'youtube';
-  if (/code|fix|bug|build|deploy|tool|skill|typescript|npm/.test(s))   return 'coding';
-  if (/search|research|find|trend|news|topic/.test(s))                 return 'research';
-  if (/image|photo|generate|edit image/.test(s))                       return 'media';
-  if (/health|status|check|diagnostic|monitor/.test(s))                return 'system';
-  if (/schedule|cron|reminder|plan/.test(s))                           return 'scheduling';
-  if (/email|telegram|notify|message|send/.test(s))                    return 'communication';
-  return 'general';
+  let best: TaskCategory = 'general';
+  let bestScore = 0;
+  for (const { category, words } of CATEGORY_KEYWORDS) {
+    let score = 0;
+    for (const re of words) if (re.test(s)) score++;
+    if (score > bestScore) { bestScore = score; best = category; }
+  }
+  return best;
+}
+
+/** Prompt a model to pick exactly one category — the model-first classifier. */
+function buildClassifyPrompt(summary: string): string {
+  return [
+    'Classify the following task into exactly ONE category.',
+    `Categories: ${TASK_CATEGORIES.join(', ')}.`,
+    'Reply with ONLY the single category word — no punctuation, no explanation.',
+    '',
+    `Task: "${summary.slice(0, 300)}"`,
+  ].join('\n');
+}
+
+/**
+ * Model-first task-type classifier. Asks the brain to pick one TASK_CATEGORIES
+ * label and validates the answer against the taxonomy; any invalid, empty, or
+ * failed response falls back to the deterministic heuristic. Never throws.
+ * Used OFF the hot path (analysis-time refinement) — see
+ * reclassifyAmbiguousRatedTypes.
+ */
+export async function classifyTaskTypeLLM(summary: string, brain: ToolBrain): Promise<TaskCategory> {
+  try {
+    const raw = await brain.chat([{ role: 'user', content: buildClassifyPrompt(summary) }]);
+    const label = normalizeBrainText(raw).trim().toLowerCase().replace(/[^a-z]/g, '');
+    if ((TASK_CATEGORIES as readonly string[]).includes(label)) return label as TaskCategory;
+    log.debug({ label, summary: summary.slice(0, 40) }, 'LLM task-type not in taxonomy — using heuristic');
+    return detectTaskType(summary);
+  } catch (err) {
+    log.debug({ err: String(err) }, 'LLM task-type classify failed — using heuristic');
+    return detectTaskType(summary);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +175,58 @@ export function updateFeedbackRating(feedbackId: string, rating: Rating, notes?:
   } finally {
     db.close();
   }
+}
+
+/**
+ * Analysis-time refinement: upgrade the coarse 'general' bucket on RATED
+ * (good/bad) rows to accurate categories using the model. Bounded and idempotent
+ * — only touches 'general' rated rows in the window, capped, and skips synthetic
+ * marker rows. Runs OFF the hot path (self-improve), so LLM latency is fine.
+ * Returns the number of rows re-labelled. Never throws on a single bad row.
+ */
+export async function reclassifyAmbiguousRatedTypes(
+  brain: ToolBrain,
+  sinceIso: string,
+  cap = 30,
+): Promise<number> {
+  let rows: { id: string; task_summary: string }[];
+  {
+    const db = getDb();
+    try {
+      rows = db.prepare(`
+        SELECT id, task_summary FROM feedback
+        WHERE rating IN ('good','bad')
+          AND task_type = 'general'
+          AND created_at >= ?
+          AND task_summary NOT LIKE 'rating-update:%'
+          AND task_summary NOT LIKE 'rating-orphan:%'
+          AND task_summary NOT LIKE 'regen-%'
+        ORDER BY created_at DESC
+        LIMIT ?
+      `).all(sinceIso, cap) as { id: string; task_summary: string }[];
+    } finally {
+      db.close();
+    }
+  }
+  if (rows.length === 0) return 0;
+
+  // Classify with the DB connection closed — do not hold a handle across awaits.
+  const updates: { id: string; t: string }[] = [];
+  for (const r of rows) {
+    const t = await classifyTaskTypeLLM(r.task_summary, brain);
+    if (t !== 'general') updates.push({ id: r.id, t });
+  }
+  if (updates.length === 0) return 0;
+
+  const db = getDb();
+  try {
+    const upd = db.prepare(`UPDATE feedback SET task_type = @t WHERE id = @id`);
+    db.transaction((us: { id: string; t: string }[]) => us.forEach((u) => upd.run(u)))(updates);
+  } finally {
+    db.close();
+  }
+  log.info({ scanned: rows.length, relabelled: updates.length }, 'Reclassified ambiguous rated feedback types (LLM)');
+  return updates.length;
 }
 
 export function addNoteToFeedback(feedbackId: string, notes: string): void {

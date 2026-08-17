@@ -16,6 +16,7 @@ import { runSelfImprovement, detectPatterns } from '../../../self-improvement/in
 import { HeldOutGate } from '../../../learning/held-out-gate.js';
 import { TraceStore } from '../../../learning/trace-store.js';
 import { DATA_DIR } from '../../../shared/paths.js';
+import type { ToolBrain } from '../../../brain/brain-text.js';
 
 const logger = createLogger('meta.self-improve');
 const DB_PATH = path.join(DATA_DIR, 'mind.db');
@@ -204,11 +205,17 @@ export const selfImproveTool: ToolDefinition = {
       const gateStore = new TraceStore(path.join(DATA_DIR, 'traces.db'));
       const heldOutGate = new HeldOutGate(gateStore);
 
+      // Wire the configured brain ONLY as the task-type classifier (accurate
+      // feedback grouping) — not as `brain`, which would also switch on
+      // brain-analysis + AutoResearch. Absent brain → heuristic labels stand.
+      const taskClassifier = (ctx.config as { brain?: ToolBrain } | undefined)?.brain;
+
       const result = await runSelfImprovement({
         trigger,
         windowDays,
         brain: brainInterface,
         heldOutGate,
+        taskClassifier,
       });
 
       return {

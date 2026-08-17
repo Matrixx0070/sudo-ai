@@ -26,6 +26,8 @@ import { FeedbackMemory } from './feedback-memory.js';
 import { AutoResearch } from './auto-research.js';
 import { HeldOutGate } from '../learning/held-out-gate.js';
 import type { PolicyAction } from '../learning/trace-driven-policy.js';
+import { reclassifyAmbiguousRatedTypes } from '../feedback/store.js';
+import type { ToolBrain } from '../brain/brain-text.js';
 
 const log = createLogger('self-improvement:engine');
 
@@ -206,6 +208,13 @@ export async function runSelfImprovement(options: {
   brain?: { chat(messages: { role: string; content: string }[], model?: string): Promise<string> };
   /** Optional HeldOutGate — when provided, improvements are evaluated before being applied. */
   heldOutGate?: HeldOutGate;
+  /**
+   * Optional model for task-type classification. Kept SEPARATE from `brain`
+   * (which drives brain-analysis + AutoResearch) so wiring accurate feedback
+   * grouping never accidentally enables those heavier paths. When present,
+   * ambiguous 'general' rated rows are re-labelled before pattern detection.
+   */
+  taskClassifier?: ToolBrain;
 }): Promise<{ actions: ImprovementAction[]; healthScore: number; summary: string; rollbacks: ImprovementRollback[] }> {
 
   const trigger    = options.trigger ?? 'manual';
@@ -213,6 +222,20 @@ export async function runSelfImprovement(options: {
   const rollbacks: ImprovementRollback[] = [];
 
   log.info({ trigger, windowDays }, 'Self-improvement run started');
+
+  // --- STEP 0: REFINE FEEDBACK TYPES (model-first, off the hot path) ---
+  // Upgrade coarse 'general' labels on rated rows to accurate categories before
+  // detection groups by task_type. Bounded + fail-soft: a classifier hiccup
+  // must never sink the whole run.
+  if (options.taskClassifier && existsSync(DB_PATH)) {
+    try {
+      const since = new Date(Date.now() - windowDays * 86_400_000).toISOString();
+      const relabelled = await reclassifyAmbiguousRatedTypes(options.taskClassifier, since);
+      if (relabelled > 0) log.info({ relabelled }, 'Feedback task types refined by model before detection');
+    } catch (err) {
+      log.warn({ err: String(err) }, 'Task-type refinement failed — continuing with heuristic labels');
+    }
+  }
 
   // --- STEP 1: DETECT ---
   // detectPatterns opens mind.db with { fileMustExist: true } and throws
