@@ -54,13 +54,14 @@ describe('computer.* family (Phase 0)', () => {
     vi.restoreAllMocks();
   });
 
-  it('registers exactly the six-tool surface under the computer category', () => {
+  it('registers the computer.* surface under the computer category', () => {
     const reg = new ToolRegistry();
     registerComputerUseTools(reg);
     const names = computerUseFamily.map((t) => t.name).sort();
     expect(names).toEqual([
       'computer.click',
       'computer.key',
+      'computer.perceive',
       'computer.screenshot',
       'computer.scroll',
       'computer.type',

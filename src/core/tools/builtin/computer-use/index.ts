@@ -47,6 +47,7 @@ import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import type { ToolRegistry } from '../../registry.js';
 import { createComputerUse } from './cross-platform/index.js';
 import type { IComputerUse } from './cross-platform/index.js';
+import { perceiveTool } from './perceive.js';
 
 const log = createLogger('tool:computer');
 
@@ -262,6 +263,7 @@ const windowTool: ToolDefinition = {
 
 export const computerUseFamily: ToolDefinition[] = [
   screenshotTool,
+  perceiveTool,
   clickTool,
   typeTool,
   keyTool,
