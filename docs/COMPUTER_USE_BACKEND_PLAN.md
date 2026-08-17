@@ -1,7 +1,33 @@
 # Computer Use Backend — Research Findings, Future-State Architecture, Implementation Plan
 
-**Date:** 2026-08-17 · **Status:** RESEARCH COMPLETE — no implementation started (per mandate)
+**Date:** 2026-08-17 · **Status:** ALL PHASES 0–5 IMPLEMENTED + LIVE-PROVEN ON LINUX/X11 (branch `feat/computer-use-backend`)
 **Method:** 105-agent deep-research workflow (fan-out search → fetch → 3-vote adversarial claim verification; 22 confirmed / 3 refuted claims) + 3 targeted gap-fill research passes + full codebase capability map of `/root/sudo-ai-v4`. Vendor docs verified live 2026-08-17.
+
+---
+
+## Implementation Status (2026-08-17)
+
+Built in `src/core/tools/builtin/computer-use/` (engine in `core/`, agent tools at the top level), 6 commits, 64 dedicated tests green, esbuild + max-lines + flag-manifest all pass.
+
+| Phase | Delivered | Live proof (real execution) |
+|---|---|---|
+| 0 Consolidate | Single `computer.*` family (screenshot/perceive/click/type/key/scroll/window/session/run_plan) on the `IComputerUse`/`IComputerDriver` path; old `computer.use` retired; authority + approval-matrix + `SUDO_COMPUTER_USE_DISABLE` kill-switch; argv `--` hardening | 112KB PNG from `:10`, 7 windows, gated-mode click refused |
+| 1 Perception + verified executor | `PerceptionService` (screenshot+AT-SPI2+windows, sha256 diff, zoom), `GroundingResolver`, `ActionExecutor` (expectation-verified, 5-rung recovery ladder), ephemeral Xvfb `SessionManager`, `ActionJournal` | Isolated `:106`: AX live (8 GTK elements), 3-step loop ok, ladder→escalate, journal written |
+| 2 Long-horizon + skills | `computer.session` + `computer.run_plan`, durable resumable `PlanRunStore`, `SkillStore` (induce/reuse), owner-DM-guarded `ViewportStreamer` | `:105`: durable run→done, resume, skill induced + reused (`usedSkill=true`) |
+| 3 Hybrid + speed | Structured AT-SPI action path (no pixel click), speculative `runBatch` (checkpoint-verify + abort), snapshot cache | `:103`: File menu via AX action (`structured=true`); batch **67% faster** (1828→604ms) |
+| 4 Driver boundary | `IComputerDriver` + `createDriver`/`detectPlatform`; **LinuxX11Driver** (reference), **LinuxWaylandDriver** (grim/ydotool/wlrctl/AT-SPI), **WindowsDriver** (PowerShell/System.Drawing/SendInput/UIA), **MacDriver** (screencapture/osascript/AXAPI skeleton); core runs unchanged through any driver | `:108`: full stack through X11 driver (perceive+verified+structured+batch), no regression; MockDriver contract test drives the executor end-to-end |
+| 5 Advanced | PRM `scoreTrajectory`, `runBestOfN` (multi-session fan-out + judge), `PlanRunStore.checkpoint/restore`, MCP export (existing loopback), AppleScript-escape hardening | 3 REAL parallel sessions (`:102/:112/:122`) scored+judged, 2767ms wall |
+
+### Honest scope limits (NOT live-proven here)
+- **Windows / Wayland / macOS drivers** are complete implementations against the documented platform APIs but were NOT executed on this X11 host (no Windows VM / Wayland compositor / Mac). They pass capability-contract tests; they need real hardware to live-prove. The core is proven platform-agnostic via the MockDriver contract test.
+- **Environment forking** is execution-state checkpoint/rollback (`PlanRunStore`), NOT pixel-level live-GUI forking (that needs TClone-class infrastructure).
+- **Vision grounder** is a wired hook (`VisionGrounder`) with AX/coords as the live path; a real grounder-model call is the next increment.
+
+### macOS TCC flow (for when a Mac host is available)
+The Mac driver needs two TCC grants attached to the process that runs sudo-ai: **Accessibility** (input synthesis + AXAPI) and **Screen Recording** (screencapture/ScreenCaptureKit). Grants attach to the responsible bundle id, so AX/capture calls must run in-process (not via a helper with a different bundle id). Pointer control needs a CGEvent helper or `cliclick` (declared unsupported until added). First run prompts for both grants; re-approval nags recur on OS upgrades.
+
+### MCP export
+No new code: the existing MCP loopback (`gateway/mcp-server.ts`) exposes read-only tools by default, so `computer.perceive` and `computer.screenshot` are reachable out of the box; the mutating `computer.*` tools are opt-in via `SUDO_MCP_EXPOSE_TOOLS`.
 
 ---
 
