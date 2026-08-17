@@ -16,10 +16,10 @@ function ev(partial: Partial<ProgressEvent> & { type: ProgressEvent['type'] }): 
 }
 
 describe('ActivityTimeline compact card (default)', () => {
-  it('starts as a bold Thinking headline with pulse glyph and elapsed meta', () => {
+  it('starts as a bold Thinking headline with a 💭 activity emoji and elapsed meta', () => {
     const tl = new ActivityTimeline();
     const text = tl.render({ nowMs: T0, startMs: T0, tick: 0 });
-    expect(text).toBe('✢ **Thinking**\n\n0s');
+    expect(text).toBe('💭 **Thinking**\n\n0s');
   });
 
   it('rotates thinking headlines during long silences', () => {
@@ -49,12 +49,22 @@ describe('ActivityTimeline compact card (default)', () => {
     expect(text).toContain('**Writing the reply**');
   });
 
-  it('formats elapsed past a minute as Nm SSs and pulses the glyph by tick', () => {
+  it('formats elapsed past a minute as Nm SSs', () => {
     const tl = new ActivityTimeline();
     expect(tl.render({ nowMs: T0 + 65_000, startMs: T0, tick: 0 })).toContain('1m 05s');
-    const g0 = tl.render({ nowMs: T0, startMs: T0, tick: 0 })[0];
-    const g1 = tl.render({ nowMs: T0, startMs: T0, tick: 1 })[0];
-    expect(g0).not.toBe(g1);
+  });
+
+  it('the activity emoji reflects WHAT it is doing (thinking vs a tool)', () => {
+    const tl = new ActivityTimeline();
+    // Thinking phase → 💭
+    expect(tl.render({ nowMs: T0, startMs: T0, tick: 0 }).startsWith('💭')).toBe(true);
+    // A web tool → the searching glyph 🔍
+    tl.onProgress(ev({ type: 'tool_call', tool: 'web.search' }), T0);
+    expect(tl.render({ nowMs: T0 + 1000, startMs: T0, tick: 0 }).startsWith('🔍')).toBe(true);
+    // Streaming the answer → the writing glyph ✍️
+    tl.onProgress(ev({ type: 'tool_result', tool: 'web.search', ok: true }), T0 + 2000);
+    tl.onProgress(ev({ type: 'streaming' }), T0 + 3000);
+    expect(tl.render({ nowMs: T0 + 3000, startMs: T0, tick: 0 }).startsWith('✍️')).toBe(true);
   });
 
   it('appends the chip line only when provided', () => {

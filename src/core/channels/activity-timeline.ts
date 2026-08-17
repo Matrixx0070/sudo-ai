@@ -22,10 +22,34 @@ import type { ProgressEvent } from '../gateway/progress.js';
 import { elapsedSeconds, type WorkPhase } from './live-state.js';
 
 /**
- * Claude-style pulse glyphs (braille spinners render as faint broken dots on
- * iOS Telegram). One glyph per tick, breathing out and back in.
+ * Semantic activity emoji (Mira-style): a friendly glyph that reflects WHAT the
+ * agent is doing, keyed by the rendered headline. Emoji render consistently on
+ * every Telegram client (unlike braille/pulse glyphs, which break up on iOS) and
+ * change as the activity changes, giving the card life without a spinner.
  */
-const PULSE_FRAMES: readonly string[] = ['✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳'];
+const ACTIVITY_EMOJI: Readonly<Record<string, string>> = {
+  Thinking: '💭',
+  'Reflecting on context': '🧠',
+  'Reasoning it through': '🧩',
+  'Searching the web': '🔍',
+  'Reading a page': '📄',
+  'Recalling memory': '📇',
+  'Preparing a document': '📝',
+  'Running code': '⚙️',
+  'Working with images': '🎨',
+  'Building a chart': '📊',
+  'Sending a message': '📤',
+  Scheduling: '⏰',
+  'Writing the reply': '✍️',
+  Working: '⚙️',
+};
+
+/** Phase-level fallback emoji when a headline has no specific mapping. */
+const PHASE_EMOJI: Readonly<Record<WorkPhase, string>> = {
+  waiting: '💭',
+  running: '⚙️',
+  streaming: '✍️',
+};
 
 /** Professional phase labels (the raw phase words read as debug output). */
 const PHASE_LABELS: Readonly<Record<WorkPhase, string>> = {
@@ -33,6 +57,11 @@ const PHASE_LABELS: Readonly<Record<WorkPhase, string>> = {
   running: 'Working…',
   streaming: 'Writing…',
 };
+
+/** The activity emoji for a headline, falling back to the phase glyph. */
+function activityEmoji(headline: string, phase: WorkPhase): string {
+  return ACTIVITY_EMOJI[headline] ?? PHASE_EMOJI[phase] ?? '💭';
+}
 
 /**
  * Semantic headline for a tool, by prefix — "Searching the web" reads like a
@@ -59,13 +88,6 @@ function headlineForTool(tool: string): string {
     if (re.test(tool)) return label;
   }
   return 'Working';
-}
-
-/** Pulse glyph for a tick. Wraps; safe for any integer. */
-function pulseFrame(tick: number): string {
-  const n = PULSE_FRAMES.length;
-  const i = Math.trunc(Number.isFinite(tick) ? tick : 0);
-  return PULSE_FRAMES[((i % n) + n) % n] ?? PULSE_FRAMES[0]!;
 }
 
 /** "47s" under a minute, "1m 05s" past it. */
@@ -201,7 +223,7 @@ export class ActivityTimeline {
     const parts: string[] = [];
 
     if (input.detail) {
-      parts.push(`${pulseFrame(input.tick)} ${PHASE_LABELS[this.phase]} ${fmtElapsed(secs)}`);
+      parts.push(`${PHASE_EMOJI[this.phase]} ${PHASE_LABELS[this.phase]} ${fmtElapsed(secs)}`);
       if (input.chip && input.chip.trim()) parts.push(input.chip.trim());
       parts.push(...this.stepLines(input.nowMs));
     } else {
@@ -216,7 +238,7 @@ export class ActivityTimeline {
       let meta = fmtElapsed(secs);
       if (current !== undefined) meta += ` · ${current.tool}…`;
       else if (done > 0) meta += ` · ${done} step${done === 1 ? '' : 's'} done`;
-      parts.push(`${pulseFrame(input.tick)} **${headline}**`, '', meta);
+      parts.push(`${activityEmoji(headline, this.phase)} **${headline}**`, '', meta);
       if (input.chip && input.chip.trim()) parts.push(input.chip.trim());
     }
 
