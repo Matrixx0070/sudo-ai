@@ -2214,6 +2214,8 @@ ${question}`, kb);
               // buffer) never fold. Flag off → always 'md' (byte-identical).
               const { createStreamFoldLatch, resolveStreamFoldOptions } = await import('./core/channels/stream-fold.js');
               const foldFormat = createStreamFoldLatch(resolveStreamFoldOptions(process.env));
+              const { stabilizeStreamingMarkdown } = await import('./core/channels/stream-markdown.js');
+              const streamCursorGlyph = process.env['SUDO_TG_STREAM_CURSOR'] === '0' ? '' : (process.env['SUDO_TG_STREAM_CURSOR'] || '▌');
               streamSink = await createBufferedEditSink(
                 (placeholder: string) => telegram.sendForStream(replyTo, placeholder),
                 // TX5 fold decision + TX1 keyboard re-send combined: editMessageText
@@ -2230,15 +2232,20 @@ ${question}`, kb);
                 // and Telegram's 4096-char editMessageText cap agree on the
                 // wire body — preventing duplicate edits whose only delta
                 // is past Telegram's truncation point (verifier HIGH #3).
-                // Streaming cursor ▌ (ChatGPT/Mira feel): rides the live content,
-                // dropped on finalize. SUDO_TG_STREAM_CURSOR='0' disables it; any
-                // other value overrides the glyph. Default on.
+                // Streaming cursor ▌ (ChatGPT/Mira feel): rides the live content
+                // and is dropped on finalize. The decorator ALSO stabilizes the
+                // partial markdown of each frame (balances open bold/italic/code/
+                // fences) so a mid-token buffer never renders broken.
+                // SUDO_TG_STREAM_CURSOR='0' disables; any other value overrides
+                // the glyph. Default on.
                 {
                   intervalMs: 800,
                   maxChars: 4080,
                   placeholder: '…',
                   label: `telegram:${msg.peerId}`,
-                  cursor: process.env['SUDO_TG_STREAM_CURSOR'] === '0' ? '' : (process.env['SUDO_TG_STREAM_CURSOR'] || '▌'),
+                  ...(streamCursorGlyph
+                    ? { liveDecorate: (body: string) => stabilizeStreamingMarkdown(body, streamCursorGlyph) }
+                    : {}),
                 },
               );
               // TX1+TX3 unified keyboard: one row carrying whichever of ⏹ Stop

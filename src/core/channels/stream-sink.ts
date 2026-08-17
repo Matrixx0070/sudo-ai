@@ -78,12 +78,14 @@ export interface BufferedEditSinkOptions {
    */
   label?: string;
   /**
-   * Streaming cursor glyph appended to the LIVE content during intermediate
-   * edits (the ChatGPT/Mira "typing" feel) and dropped on finalize. It rides the
-   * growing text — no extra edits, so no rate-limit cost. '' disables it.
-   * Only appears on content edits, never on the status card or placeholder.
+   * Decorate a LIVE content frame just before it is edited in — used to append a
+   * streaming cursor and stabilize partial markdown (the ChatGPT/Mira "typing"
+   * feel). Applied ONLY to content edits, never to the status card, placeholder,
+   * or the finalize edit, so the final message is exactly the canonical text.
+   * Keeps this sink channel/markdown-agnostic: the caller injects the rendering
+   * concern. Runs after the maxChars clamp; it must add only a few chars.
    */
-  cursor?: string;
+  liveDecorate?: (body: string) => string;
 }
 
 export interface StreamSink {
@@ -153,7 +155,7 @@ export async function createBufferedEditSink(
   const placeholder = options.placeholder ?? '…';
   const maxChars = options.maxChars ?? 8000;
   const label = options.label ?? 'sink';
-  const cursor = options.cursor ?? '';
+  const liveDecorate = options.liveDecorate;
 
   let messageId: string | number | null = null;
   try {
@@ -182,12 +184,12 @@ export async function createBufferedEditSink(
     if (inFlight) return; // serialise edits
     if (messageId === null) return;
 
-    // Live content gets the streaming cursor appended (it rides the growing
-    // text). The status card / placeholder never do. Clamp the body first so
-    // the cursor is never the thing that gets truncated.
+    // Live content is decorated (cursor + partial-markdown stabilization); the
+    // status card / placeholder never are. Clamp the body first so the decorator
+    // only appends a few chars past the channel cap.
     const hasContent = buffer.length > 0;
-    const text = hasContent && cursor
-      ? clampForChannel(buffer) + cursor
+    const text = hasContent && liveDecorate
+      ? liveDecorate(clampForChannel(buffer))
       : clampForChannel(buffer || statusText || placeholder);
     if (text === lastEditedText) return; // noop suppression
 

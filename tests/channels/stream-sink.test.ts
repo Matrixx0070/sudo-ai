@@ -109,22 +109,22 @@ describe('chunk debounce + finalize', () => {
     expect(t.edits[0]?.text).toBe('Final canonical text');
   });
 
-  it('appends the streaming cursor to live content, then drops it on finalize', async () => {
+  it('decorates live content (cursor), then drops it on finalize', async () => {
     const t = fakeTransport();
-    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100, cursor: '▌' });
+    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100, liveDecorate: (b) => `${b}▌` });
     sink.chunk('Hello world');
     await vi.advanceTimersByTimeAsync(150);
     // The live edit carries the cursor riding the text…
     expect(t.edits.at(-1)?.text).toBe('Hello world▌');
     vi.useRealTimers();
-    // …and the finalized message is clean (no cursor).
+    // …and the finalized message is exactly the canonical text (no decoration).
     await sink.finalize('Hello world');
     expect(t.edits.at(-1)?.text).toBe('Hello world');
   });
 
-  it('does not put the cursor on the status card (only on content)', async () => {
+  it('does not decorate the status card (only content)', async () => {
     const t = fakeTransport();
-    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100, cursor: '▌' });
+    const sink = await createBufferedEditSink(t.open, t.edit, { intervalMs: 100, liveDecorate: (b) => `${b}▌` });
     sink.status('💭 **Thinking** · 2s');
     await vi.advanceTimersByTimeAsync(150);
     expect(t.edits.at(-1)?.text).toBe('💭 **Thinking** · 2s'); // no cursor on status
