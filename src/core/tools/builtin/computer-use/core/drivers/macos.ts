@@ -23,6 +23,15 @@ function pngDimensions(buf: Buffer): { width: number; height: number } {
   return { width: 0, height: 0 };
 }
 
+/**
+ * Escape a string for embedding inside an AppleScript double-quoted literal.
+ * Backslash MUST be escaped first, then the quote — otherwise text containing a
+ * dangling backslash could consume the closing quote and inject AppleScript.
+ */
+export function osaStr(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 /** Map key names to AppleScript key codes / keystroke syntax (best-effort). */
 function osaKey(key: string): string {
   const codes: Record<string, number> = { Return: 36, Enter: 36, Tab: 48, Escape: 53, Backspace: 51, Delete: 117, Up: 126, Down: 125, Left: 123, Right: 124 };
@@ -33,7 +42,7 @@ function osaKey(key: string): string {
     .map((m) => (m === 'ctrl' ? 'control down' : m === 'alt' ? 'option down' : m === 'cmd' ? 'command down' : m === 'shift' ? 'shift down' : ''))
     .filter(Boolean)
     .join(', ');
-  const esc = base.replace(/"/g, '\\"');
+  const esc = osaStr(base);
   return using ? `keystroke "${esc}" using {${using}}` : `keystroke "${esc}"`;
 }
 
@@ -78,7 +87,7 @@ export class MacDriver implements IComputerDriver {
     const y = Math.round(a.y ?? 0);
     switch (a.kind) {
       case 'type':
-        return osa(`tell application "System Events" to keystroke "${(a.text ?? '').replace(/"/g, '\\"')}"`);
+        return osa(`tell application "System Events" to keystroke "${osaStr(a.text ?? '')}"`);
       case 'key':
         return osa(`tell application "System Events" to ${osaKey(a.key ?? '')}`);
       case 'click':
@@ -88,7 +97,7 @@ export class MacDriver implements IComputerDriver {
         // Pointer control needs `cliclick` or a CGEvent helper (Phase 5).
         return { success: false, error: `pointer action ${a.kind} at ${x},${y} needs the Phase 5 CGEvent helper` };
       case 'focus_window':
-        return osa(`tell application "${(a.window ?? '').replace(/"/g, '\\"')}" to activate`);
+        return osa(`tell application "${osaStr(a.window ?? '')}" to activate`);
       default:
         return { success: false, error: `unsupported action ${(a as LowLevelAction).kind}` };
     }

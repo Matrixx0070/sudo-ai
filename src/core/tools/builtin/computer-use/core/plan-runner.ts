@@ -66,10 +66,34 @@ export class PlanRunStore {
   async list(): Promise<string[]> {
     try {
       const files = await readdir(this.baseDir);
-      return files.filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5));
+      return files.filter((f) => f.endsWith('.json') && !f.includes('.ckpt-')).map((f) => f.slice(0, -5));
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Checkpoint a run's current state under a label. Cheap execution-state
+   * rollback point (not a pixel-level environment fork — that needs TClone-class
+   * infra). restore() rewinds the run to this cursor so a later branch can be
+   * retried from a known-good step.
+   */
+  async checkpoint(runId: string, label: string): Promise<void> {
+    const state = await this.load(runId);
+    if (!state) throw new Error(`checkpoint: run ${runId} not found`);
+    const p = this.pathFor(`${runId}.ckpt-${label.replace(/[^a-zA-Z0-9_.-]/g, '_')}`);
+    await mkdir(dirname(p), { recursive: true });
+    await writeFile(p, JSON.stringify(state), 'utf8');
+  }
+
+  /** Rewind a run to a labelled checkpoint (cursor + results restored). */
+  async restore(runId: string, label: string): Promise<PlanRunState> {
+    const raw = await readFile(this.pathFor(`${runId}.ckpt-${label.replace(/[^a-zA-Z0-9_.-]/g, '_')}`), 'utf8');
+    const ckpt = JSON.parse(raw) as PlanRunState;
+    ckpt.status = 'running';
+    ckpt.updatedAt = Date.now();
+    await this.save(ckpt);
+    return ckpt;
   }
 }
 

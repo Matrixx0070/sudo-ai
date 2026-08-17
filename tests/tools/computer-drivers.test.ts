@@ -15,7 +15,7 @@ import { ActionExecutor } from '../../src/core/tools/builtin/computer-use/core/e
 import { LinuxX11Driver } from '../../src/core/tools/builtin/computer-use/core/drivers/linux-x11.js';
 import { LinuxWaylandDriver } from '../../src/core/tools/builtin/computer-use/core/drivers/linux-wayland.js';
 import { WindowsDriver } from '../../src/core/tools/builtin/computer-use/core/drivers/windows.js';
-import { MacDriver } from '../../src/core/tools/builtin/computer-use/core/drivers/macos.js';
+import { MacDriver, osaStr } from '../../src/core/tools/builtin/computer-use/core/drivers/macos.js';
 import type { UIElement } from '../../src/core/tools/builtin/computer-use/core/types.js';
 
 /** A fully in-memory driver — the contract reference. */
@@ -118,5 +118,13 @@ describe('per-platform capability contracts', () => {
     const d = new WindowsDriver();
     expect(d.platform).toBe('windows');
     expect(d.capabilities()).toMatchObject({ accessibility: true, structuredAction: true, windows: true });
+  });
+
+  it('macOS AppleScript escaping neutralises backslash-then-quote injection', () => {
+    // Backslash must be doubled BEFORE the quote is escaped, else a trailing
+    // backslash would consume the closing quote and inject AppleScript.
+    expect(osaStr('a"b')).toBe('a\\"b');
+    expect(osaStr('a\\')).toBe('a\\\\');
+    expect(osaStr('"; do shell script "evil')).toBe('\\"; do shell script \\"evil');
   });
 });
