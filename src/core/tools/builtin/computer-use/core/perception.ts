@@ -17,7 +17,8 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createLogger } from '../../../../shared/logger.js';
 import type { Snapshot, UIElement, WindowInfo } from './types.js';
-import { dumpAxTree } from './atspi.js';
+import type { IComputerDriver, DriverPlatform } from './driver.js';
+import { createDriver } from './driver.js';
 
 const execFileAsync = promisify(execFile);
 const log = createLogger('computer:perception');
@@ -29,6 +30,10 @@ export interface PerceptionOptions {
   intersectWindows?: boolean;
   maxAxElements?: number;
   axTimeoutMs?: number;
+  /** Platform driver (capture/axTree/windows). Defaults to the auto-detected driver. */
+  driver?: IComputerDriver;
+  /** Force a platform when auto-creating the driver. */
+  platform?: DriverPlatform;
 }
 
 function pngDimensions(buf: Buffer): { width: number; height: number } {
@@ -49,8 +54,16 @@ function rectsIntersect(
 export class PerceptionService {
   private seq = 0;
   private cache = new Map<string, { snap: Snapshot; at: number }>();
+  private driverPromise?: Promise<IComputerDriver>;
 
   constructor(private readonly opts: PerceptionOptions = {}) {}
+
+  /** Resolve the platform driver (injected, or lazily auto-created once). */
+  private getDriver(): Promise<IComputerDriver> {
+    if (this.opts.driver) return Promise.resolve(this.opts.driver);
+    if (!this.driverPromise) this.driverPromise = createDriver(this.opts.platform);
+    return this.driverPromise;
+  }
 
   /**
    * Return a recent snapshot for the display if one was captured within `ttlMs`,
@@ -70,41 +83,29 @@ export class PerceptionService {
     this.cache.delete(display);
   }
 
-  /** Capture a fused snapshot of the given display. */
+  /** Capture a fused snapshot of the given display (delegates to the platform driver). */
   async capture(display: string): Promise<Snapshot> {
     const ts = Date.now();
     const seq = this.seq++;
+    const driver = await this.getDriver();
 
-    const [png, windows] = await Promise.all([this.screenshot(display), this.windows(display)]);
-    const { width, height } = pngDimensions(png);
+    const [cap, windows] = await Promise.all([driver.capture(display), driver.windows(display)]);
+    const png = cap.png;
+    const width = cap.width || pngDimensions(png).width;
+    const height = cap.height || pngDimensions(png).height;
     const hash = createHash('sha256').update(png).digest('hex');
 
     let elements: UIElement[] = [];
     let axAvailable = false;
-    if (this.opts.accessibility !== false) {
-      elements = await dumpAxTree({
-        display,
-        maxElements: this.opts.maxAxElements ?? 400,
-        timeoutMs: this.opts.axTimeoutMs ?? 8000,
-      });
+    if (this.opts.accessibility !== false && driver.capabilities().accessibility) {
+      elements = await driver.axTree(display);
       axAvailable = elements.length > 0;
       if (axAvailable && this.opts.intersectWindows !== false && windows.length > 0) {
         elements = this.filterToWindows(elements, windows);
       }
     }
 
-    return {
-      seq,
-      ts,
-      display,
-      screenshot: png.toString('base64'),
-      width,
-      height,
-      hash,
-      elements,
-      windows,
-      axAvailable,
-    };
+    return { seq, ts, display, screenshot: png.toString('base64'), width, height, hash, elements, windows, axAvailable };
   }
 
   /** Crop a region [x,y,w,h] out of a snapshot's screenshot, upscaled 2x for legibility. */
@@ -135,47 +136,6 @@ export class PerceptionService {
   /** Cheap change test: do two snapshots differ visually? */
   static changed(before: Snapshot, after: Snapshot): boolean {
     return before.hash !== after.hash;
-  }
-
-  private async screenshot(display: string): Promise<Buffer> {
-    const dir = await mkdtemp(join(tmpdir(), 'cu-shot-'));
-    const out = join(dir, 'shot.png');
-    await execFileAsync('scrot', ['-o', out], { env: { ...process.env, DISPLAY: display }, timeout: 10000 });
-    return readFile(out);
-  }
-
-  private async windows(display: string): Promise<WindowInfo[]> {
-    const env = { ...process.env, DISPLAY: display };
-    let activeId = '';
-    try {
-      const { stdout } = await execFileAsync('xdotool', ['getactivewindow'], { env, timeout: 2000 });
-      activeId = stdout.trim();
-    } catch {
-      /* no active window / no WM */
-    }
-    try {
-      // -lG adds geometry: id desktop x y w h host title
-      const { stdout } = await execFileAsync('wmctrl', ['-lG'], { env, timeout: 3000 });
-      const wins: WindowInfo[] = [];
-      for (const line of stdout.split('\n')) {
-        const m = line.match(/^(0x[0-9a-fA-F]+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(\d+)\s+(\d+)\s+\S+\s+(.*)$/);
-        if (!m) continue;
-        const id = m[1];
-        const idDec = String(parseInt(id, 16));
-        wins.push({
-          id,
-          x: parseInt(m[3], 10),
-          y: parseInt(m[4], 10),
-          w: parseInt(m[5], 10),
-          h: parseInt(m[6], 10),
-          title: m[7],
-          active: activeId !== '' && (activeId === idDec || activeId === id),
-        });
-      }
-      return wins;
-    } catch {
-      return [];
-    }
   }
 
   private filterToWindows(elements: UIElement[], windows: WindowInfo[]): UIElement[] {

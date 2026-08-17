@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { PlanRunStore, PlanRunner, type PlanRunState } from '../../src/core/tools/builtin/computer-use/core/plan-runner.js';
 import { SkillStore } from '../../src/core/tools/builtin/computer-use/core/skill-store.js';
 import { viewportAllowed } from '../../src/core/tools/builtin/computer-use/core/viewport.js';
-import { LinuxInputSink } from '../../src/core/tools/builtin/computer-use/core/linux-input.js';
+import { LinuxX11Driver } from '../../src/core/tools/builtin/computer-use/core/drivers/linux-x11.js';
 import type { ActionExecutor } from '../../src/core/tools/builtin/computer-use/core/executor.js';
 import type { Action, StepResult } from '../../src/core/tools/builtin/computer-use/core/types.js';
 
@@ -128,9 +128,10 @@ describe('viewport privacy guard', () => {
 });
 
 describe('input argv-injection guard', () => {
-  it('rejects a key that would smuggle an xdotool flag', async () => {
-    const sink = new LinuxInputSink(':999', false); // display never touched — rejected before spawn
-    const r = await sink.key('--clearmodifiers');
+  it('rejects a key that would smuggle an xdotool flag (X11 driver)', async () => {
+    const driver = new LinuxX11Driver();
+    // display never touched — rejected before spawn by the leading-dash guard.
+    const r = await driver.inject(':999', { kind: 'key', key: '--clearmodifiers' });
     expect(r.success).toBe(false);
     expect(r.error).toMatch(/invalid key/);
   });

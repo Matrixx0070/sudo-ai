@@ -12,14 +12,13 @@ import type { Action, ActionPlan } from './core/types.js';
 import { PerceptionService } from './core/perception.js';
 import { GroundingResolver } from './core/grounding.js';
 import { ActionExecutor } from './core/executor.js';
-import { LinuxInputSink } from './core/linux-input.js';
 import { ActionJournal } from './core/journal.js';
 import { PlanRunStore, PlanRunner, type PlanRunState } from './core/plan-runner.js';
 import { SkillStore } from './core/skill-store.js';
 import { createEphemeralSession, attachSession, type Session } from './core/session.js';
 import { resolveDisplay } from './perceive.js';
-import { invokeAxAction } from './core/atspi.js';
-import type { Grounded } from './core/types.js';
+import { createDriver } from './core/driver.js';
+import { driverSink, driverStructuredActor } from './core/driver-adapters.js';
 
 const log = createLogger('tool:computer-session');
 const KILL_SWITCH_ENV = 'SUDO_COMPUTER_USE_DISABLE';
@@ -167,7 +166,6 @@ export const sessionTool: ToolDefinition = {
 // computer.run_plan
 // ---------------------------------------------------------------------------
 
-const perception = new PerceptionService({ accessibility: true });
 const grounding = new GroundingResolver();
 const planStore = new PlanRunStore();
 const skillStore = new SkillStore();
@@ -206,16 +204,15 @@ export const runPlanTool: ToolDefinition = {
     if (process.env[KILL_SWITCH_ENV] === '1') return { success: false, output: `computer: disabled (${KILL_SWITCH_ENV}=1)` };
 
     const { display, shared } = resolveSessionDisplay(params['session']);
-    const sink = new LinuxInputSink(display, shared);
     const journal = new ActionJournal(ctx.sessionId || 'default', display);
 
-    // Structured (API-first) actor: perform a grounded AX element's action via
-    // the accessibility interface instead of a pixel click. Fails soft to false
-    // → the executor falls back to coordinate injection.
-    const structuredActor = async (grounded: Grounded): Promise<boolean> => {
-      if (!grounded.element?.name) return false;
-      return invokeAxAction({ display, name: grounded.element.name, role: grounded.element.role, app: grounded.element.app });
-    };
+    // Build the platform driver for this run. `guardProtected` is only honoured
+    // by the X11 driver (opts ignored elsewhere) — it protects the shared owner
+    // desktop from synthetic input into Terminal/Claude windows.
+    const driver = await createDriver(undefined, { guardProtected: shared });
+    const perception = new PerceptionService({ accessibility: true, driver });
+    const sink = driverSink(driver, display);
+    const structuredActor = driverStructuredActor(driver, display);
 
     const makeExecutor = (state: PlanRunState) =>
       new ActionExecutor({
