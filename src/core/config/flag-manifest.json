@@ -1,6 +1,6 @@
 {
   "generated": "scripts/gen-flag-manifest.ts",
-  "count": 830,
+  "count": 831,
   "flags": [
     "SUDO_16",
     "SUDO_ACP_MODEL",
@@ -67,6 +67,7 @@
     "SUDO_AUTONOMY_V1_INTERVAL_MS",
     "SUDO_AUTONOMY_V1_REWAKE_MS",
     "SUDO_AUTO_APPROVE",
+    "SUDO_AUTO_FEEDBACK",
     "SUDO_AUTO_PLAN",
     "SUDO_BACKGROUND_DELIVERY",
     "SUDO_BASH_ALLOWLIST_FASTPATH",

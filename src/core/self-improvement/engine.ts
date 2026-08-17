@@ -26,7 +26,8 @@ import { FeedbackMemory } from './feedback-memory.js';
 import { AutoResearch } from './auto-research.js';
 import { HeldOutGate } from '../learning/held-out-gate.js';
 import type { PolicyAction } from '../learning/trace-driven-policy.js';
-import { reclassifyAmbiguousRatedTypes } from '../feedback/store.js';
+import { refineBeforeDetection } from './refine-before-detection.js';
+import type { AutoEvalResult } from '../feedback/auto-evaluate.js';
 import type { ToolBrain } from '../brain/brain-text.js';
 
 const log = createLogger('self-improvement:engine');
@@ -215,7 +216,10 @@ export async function runSelfImprovement(options: {
    * ambiguous 'general' rated rows are re-labelled before pattern detection.
    */
   taskClassifier?: ToolBrain;
-}): Promise<{ actions: ImprovementAction[]; healthScore: number; summary: string; rollbacks: ImprovementRollback[]; reclassified: number }> {
+  /** Model for autonomous self-evaluation — grades unrated tasks so the loop
+   *  learns without owner taps (see refine-before-detection). Off the hot path. */
+  autoRater?: ToolBrain;
+}): Promise<{ actions: ImprovementAction[]; healthScore: number; summary: string; rollbacks: ImprovementRollback[]; reclassified: number; autoRated: AutoEvalResult }> {
 
   const trigger    = options.trigger ?? 'manual';
   const windowDays = options.windowDays ?? 14;
@@ -223,20 +227,16 @@ export async function runSelfImprovement(options: {
 
   log.info({ trigger, windowDays }, 'Self-improvement run started');
 
-  // --- STEP 0: REFINE FEEDBACK TYPES (model-first, off the hot path) ---
-  // Upgrade coarse 'general' labels on rated rows to accurate categories before
-  // detection groups by task_type. Bounded + fail-soft: a classifier hiccup
-  // must never sink the whole run.
-  let reclassified = 0;
-  if (options.taskClassifier && existsSync(DB_PATH)) {
-    try {
-      const since = new Date(Date.now() - windowDays * 86_400_000).toISOString();
-      reclassified = await reclassifyAmbiguousRatedTypes(options.taskClassifier, since);
-      if (reclassified > 0) log.info({ reclassified }, 'Feedback task types refined by model before detection');
-    } catch (err) {
-      log.warn({ err: String(err) }, 'Task-type refinement failed — continuing with heuristic labels');
-    }
-  }
+  const windowSince = new Date(Date.now() - windowDays * 86_400_000).toISOString();
+
+  // --- STEP 0: PRE-DETECTION REFINEMENT (off the hot path) ---
+  // Autonomous self-evaluation of unrated tasks + model-first task-type
+  // refinement, so the detector groups on an honest AND accurate signal.
+  const { autoRated, reclassified } = await refineBeforeDetection({
+    autoRater: options.autoRater,
+    taskClassifier: options.taskClassifier,
+    windowSince,
+  });
 
   // --- STEP 1: DETECT ---
   // detectPatterns opens mind.db with { fileMustExist: true } and throws
@@ -476,16 +476,18 @@ export async function runSelfImprovement(options: {
   // --- SUMMARY ---
   const appliedCount = actions.filter(a => a.applied).length;
   let summary = buildSummary(patterns, actions, appliedCount);
-  // Surface the model-refinement count so callers report it honestly instead of
-  // guessing (the agent otherwise confabulated "0 — engine doesn't reclassify").
+  // Surface auto-measurement so callers report real numbers instead of guessing.
+  if (autoRated.rated > 0) {
+    summary += `\n\n**Auto-evaluated (no owner taps needed):** graded ${autoRated.rated} of ${autoRated.scanned} recent tasks — ${autoRated.good} good / ${autoRated.bad} bad (hybrid: behavioural signals + model judge).`;
+  }
   if (reclassified > 0) {
     summary += `\n\n**Feedback types refined (model):** ${reclassified} row(s) re-labelled from 'general' before analysis.`;
   }
 
-  log.info({ appliedCount, healthScore: patterns.healthScore, rollbackCount: rollbacks.length, reclassified },
+  log.info({ appliedCount, healthScore: patterns.healthScore, rollbackCount: rollbacks.length, reclassified, autoRated },
     'Self-improvement run complete');
 
-  return { actions, healthScore: patterns.healthScore, summary, rollbacks, reclassified };
+  return { actions, healthScore: patterns.healthScore, summary, rollbacks, reclassified, autoRated };
 }
 
 // ---------------------------------------------------------------------------

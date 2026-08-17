@@ -208,14 +208,17 @@ export const selfImproveTool: ToolDefinition = {
       // Wire the configured brain ONLY as the task-type classifier (accurate
       // feedback grouping) — not as `brain`, which would also switch on
       // brain-analysis + AutoResearch. Absent brain → heuristic labels stand.
-      const taskClassifier = (ctx.config as { brain?: ToolBrain } | undefined)?.brain;
+      const configuredBrain = (ctx.config as { brain?: ToolBrain } | undefined)?.brain;
 
       const result = await runSelfImprovement({
         trigger,
         windowDays,
         brain: brainInterface,
         heldOutGate,
-        taskClassifier,
+        taskClassifier: configuredBrain,
+        // Autonomous self-measurement: grade recent unrated tasks so the owner
+        // never has to tap 👍/👎 (env SUDO_AUTO_FEEDBACK=0 disables).
+        autoRater: configuredBrain,
       });
 
       return {
@@ -226,6 +229,7 @@ export const selfImproveTool: ToolDefinition = {
           actionsApplied: result.actions.filter(a => a.applied).length,
           actionsTotal: result.actions.length,
           feedbackTypesReclassified: result.reclassified,
+          autoEvaluated: result.autoRated,
           // AL8.0 R5: rollback records were produced by the engine and then
           // discarded here — surface them so an operator (or a future revert
           // path) can see exactly what was applied and when.
