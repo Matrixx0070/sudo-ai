@@ -30,10 +30,11 @@ describe('classifyToolError — real error strings → actionable hints', () => 
     expect(h.why.toLowerCase()).toContain('workspace');
   });
 
-  it('repo-exec operator refusal → steers to quoting + one plain command (new + legacy wording)', () => {
-    const hNew = classifyToolError('system.exec', 'shell operators (pipe/redirect/chaining/substitution/glob) are not allowed in repo-exec — quote them as an argument, or run one plain command');
+  it('repo-exec operator refusal → steers to quoting + confirms pipes are allowed (new + legacy wording)', () => {
+    const hNew = classifyToolError('system.exec', 'shell operators (redirect/chaining/substitution/glob) are not allowed in repo-exec — quote them as an argument, or run one plain command (pipes between allowlisted read-only commands are OK)');
     expect(hNew.fix.toLowerCase()).toContain('quote');
-    expect(hNew.fix.toLowerCase()).toContain('one plain command');
+    // Corrected guidance: pipes ARE allowed (the old hint wrongly said "never pipe").
+    expect(hNew.why.toLowerCase()).toContain('pipes between read-only commands are allowed');
     // Legacy wording must still classify (back-compat).
     const hOld = classifyToolError('system.exec', 'shell metacharacters are not allowed in repo-exec');
     expect(hOld.what.toLowerCase()).toContain('repo');

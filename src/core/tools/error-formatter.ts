@@ -57,10 +57,10 @@ const RULES: ErrorRule[] = [
     id: 'repo-exec-metachar',
     test: (e) => e.includes('not allowed in repo-exec') || e.includes('shell metacharacters are not allowed'),
     hint: {
-      what: 'system.exec target:"repo" refused the command because of an unquoted shell operator.',
-      why: 'The real-repo channel runs ONE command via execFile (no shell) — pipes, redirects, &&, and substitutions are not honored. But QUOTED arguments are fine: a regex like "a|b" or a glob like "*.ts" works as long as you wrap it in quotes.',
-      fix: 'Quote any pattern/glob argument (rg -n "a|b\\(\\)" src), and never pipe or redirect — run one plain command. To filter output, narrow the command itself instead of piping to grep/tail.',
-      example: 'system.exec({ target: "repo", command: "rg -n \\"as any|attach\\" src" })',
+      what: 'system.exec target:"repo" refused the command for an unquoted shell operator.',
+      why: 'The real-repo channel runs via execFile (no shell). Pipes BETWEEN read-only commands ARE allowed (up to 4 segments): `rg foo src | head -20`. What is NOT expanded: redirects (>, >>), chaining (&&, ;), substitution ($(), backticks), and globs (*, ?).',
+      fix: 'Pipe to filter output (rg ... | head). For a glob, use `rg -g "*.ts" foo` or list explicit paths. Quote any regex you want as literal text (rg -n "a|b\\(\\)" src). Never use >, &&, or $() here.',
+      example: 'system.exec({ target: "repo", command: "rg -n \\"as any\\" src | head -20" })',
     },
   },
   {
@@ -69,9 +69,20 @@ const RULES: ErrorRule[] = [
     test: (e) => e.includes('is not a repo-allowlisted command'),
     hint: {
       what: 'That command is not on the repo-exec allowlist.',
-      why: 'target:"repo" permits only a fixed set of read/verify commands for safety (pnpm/npm test|lint|build, read-only git, rg, ls, wc, read-only pm2). cat/head/tail/find/curl/node are NOT allowlisted.',
-      fix: 'To READ a repo file, use meta.self-modify action:"read-file" (or rg to search it) — not cat/head/tail. To FIND files, use rg --files -g "<glob>". To verify, use pnpm test/lint/build or read-only git.',
-      example: 'meta.self-modify({ action: "read-file", path: "src/core/agent/loop.ts" })',
+      why: 'target:"repo" permits read/verify commands only. ALLOWED: pnpm/npm test|lint|build; read-only git (status/log/diff/branch/rev-parse/describe/blame/shortlog/ls-files); rg; grep; ls; wc; cat; head; tail; stat; sort; uniq; read-only pm2 (list/status/logs sudo-ai-v5). NOT allowed: find, sed, awk, echo, curl, node/npx, mkdir/touch/rm (writes), git write ops, pm2 restart.',
+      fix: 'Search with rg or grep; read a file with cat/head/tail (or meta.self-modify read-file); list files with `rg --files -g "<glob>"` or ls; EDIT with meta.self-modify. Network and writes are blocked here.',
+      example: 'system.exec({ target: "repo", command: "grep -rn \\"TODO\\" src | head -20" })',
+    },
+  },
+  {
+    // repo-allowlist.ts: `'<command>' is not an allowed form of '<head>'`
+    id: 'repo-exec-not-allowed-form',
+    test: (e) => e.includes('is not an allowed form of'),
+    hint: {
+      what: 'That command is allowlisted, but THIS form of it is not (a write/mutating variant).',
+      why: 'repo-exec is read-and-verify only: git → read-only subcommands (status/log/diff/branch/rev-parse/describe/blame/shortlog/ls-files); pm2 → list/status/logs sudo-ai-v5; npm/pnpm → test/lint/build.',
+      fix: 'Use a read-only form, or route the mutating action through the right tool: git commit/checkout → meta.self-modify (or the self-build flow); pm2 restart → meta.self-modify restart. Do not try to mutate via repo-exec.',
+      example: 'system.exec({ target: "repo", command: "git log --oneline -5" })',
     },
   },
   {

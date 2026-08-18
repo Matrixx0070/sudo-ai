@@ -159,6 +159,29 @@ describe('checkRepoCommand — hardens rg against command-execution + flag-path 
   });
 });
 
+describe('checkRepoCommand — grep (read-only, like rg)', () => {
+  it.each([
+    'grep -rn "TODO" src',                 // recursive read-only search
+    'grep -n "as any" src/core/agent/loop.ts',
+    'grep -rn "foo" src | head -20',       // pipe grep → head (both read-only)
+    'grep --include="*.ts" -rn "foo" src', // include glob is applied internally (safe, no shell)
+    'grep -ril foo src',                   // lowercase -l/-i/-r cluster is fine (not -R)
+  ])('allows %j', (cmd) => {
+    expect(checkRepoCommand(cmd).allowed).toBe(true);
+  });
+
+  it.each([
+    'grep -R foo src',                     // -R dereferences symlinks OUT of the repo
+    'grep --dereference-recursive foo src',
+    'grep --dereference foo src',
+    'grep foo /etc/passwd',                // absolute path escapes the repo
+    'grep foo config/.env',                // credential path blocked on every command
+    'grep -rn foo > out.txt',              // redirect is an unquoted operator
+  ])('refuses %j', (cmd) => {
+    expect(checkRepoCommand(cmd).allowed).toBe(false);
+  });
+});
+
 describe('repoExecEnv — strips the daemon prod runtime env', () => {
   const base = {
     PATH: '/usr/bin:/bin',
