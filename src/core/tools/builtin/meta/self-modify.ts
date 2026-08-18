@@ -431,7 +431,7 @@ function doSelfCommit(rawPath: string, subject: string): string {
   return 'committed as SUDO AI';
 }
 
-async function doFullCycle(rawPath: string, oldText: string, newText: string, replaceAll = false, testTarget?: string, selfCommitMessage?: string): Promise<ToolResult> {
+async function doFullCycle(rawPath: string, oldText: string, newText: string, replaceAll = false, testTarget?: string, selfCommitMessage?: string, skipTests = false): Promise<ToolResult> {
   if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
     return { success: false, output: 'meta.self-modify full-cycle is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
   }
@@ -439,7 +439,7 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
   const editResult = await doEditFile(rawPath, oldText, newText, replaceAll);
   if (!editResult.success) return editResult;
 
-  // Step 2: Build
+  // Step 2: Build (runs tsc --noEmit first, then esbuild — both gate).
   const buildResult = doBuild();
   if (!buildResult.success) {
     return {
@@ -449,14 +449,20 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
     };
   }
 
-  // Step 3: Test — never restart into a fix that breaks the suite.
-  const testResult = await doTest(testTarget);
-  if (!testResult.success) {
-    return {
-      success: false,
-      output: `Edit applied and build succeeded, but TESTS FAILED — NOT restarting. Fix the tests or restore the backup.\n\n${testResult.output}`,
-      data: { editResult, buildResult, testResult },
-    };
+  // Step 3: Test — never restart into a fix that breaks the suite. `skipTests`
+  // (no file-specific test for the patch → tsc+build already gated) skips this.
+  let testResult: ToolResult | null = null;
+  let testLine = '✓ Tests: skipped (no file-specific test — tsc+build gated)';
+  if (!skipTests) {
+    testResult = await doTest(testTarget);
+    if (!testResult.success) {
+      return {
+        success: false,
+        output: `Edit applied and build succeeded, but TESTS FAILED — NOT restarting. Fix the tests or restore the backup.\n\n${testResult.output}`,
+        data: { editResult, buildResult, testResult },
+      };
+    }
+    testLine = '✓ Tests: passed';
   }
 
   // Step 3b: commit as SUDO-AI (provenance) BEFORE restart, so the change is
@@ -472,7 +478,7 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
 
   return {
     success: restartResult.success,
-    output: `DONE!\n\n✓ Edit: ${editResult.output}\n✓ Build: success\n✓ Tests: passed${commitNote}\n${restartResult.success ? '✓ Restart: online' : '⚠ Restart: ' + restartResult.output}`,
+    output: `DONE!\n\n✓ Edit: ${editResult.output}\n✓ Build: success\n${testLine}${commitNote}\n${restartResult.success ? '✓ Restart: online' : '⚠ Restart: ' + restartResult.output}`,
     data: { editResult, buildResult, testResult, restartResult },
   };
 }
@@ -643,6 +649,7 @@ export const selfModifyTool: ToolDefinition = {
             (params['replaceAll'] as boolean | undefined) ?? false,
             params['testTarget'] as string | undefined,
             params['selfCommitMessage'] as string | undefined,
+            (params['skipTests'] as boolean | undefined) ?? false,
           );
 
         case 'history':

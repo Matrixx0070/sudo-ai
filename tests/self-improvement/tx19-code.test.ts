@@ -7,7 +7,19 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { parseCodePatch, renderCodeDeployCard, codeSelfImproveEnabled } from '../../src/core/self-improvement/tx19-code.js';
+import { parseCodePatch, renderCodeDeployCard, codeSelfImproveEnabled, resolveApplyTestPlan } from '../../src/core/self-improvement/tx19-code.js';
+
+describe('resolveApplyTestPlan — scope the apply gate per file', () => {
+  it('PLAN-1: runs the mirrored file-specific test when it exists', () => {
+    // tests/self-improvement/tx19-code.test.ts (this file) exists.
+    expect(resolveApplyTestPlan('src/core/self-improvement/tx19-code.ts'))
+      .toEqual({ testTarget: 'tests/self-improvement/tx19-code.test.ts' });
+  });
+  it('PLAN-2: skips tests (tsc+build only) when no file-specific test exists', () => {
+    // loop-guard.ts has no dedicated test file → skip, do not run the whole area.
+    expect(resolveApplyTestPlan('src/core/agent/loop-guard.ts')).toEqual({ skipTests: true });
+  });
+});
 
 const saved = process.env['SUDO_TX19_CODE'];
 afterEach(() => {

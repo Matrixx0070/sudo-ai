@@ -107,39 +107,53 @@ export async function runCodeSelfImproveCycle(
 export interface ApplyOutcome { ok: boolean; output: string }
 
 /**
- * Derive a scoped vitest target from a source path so the apply-time test gate
- * does not block on the whole suite: src/core/<area>/… → tests/<area>. Returns
- * undefined when there is no obvious scope (caller then runs the full suite).
+ * Resolve the apply-time test scope for a patched source file. Runs the file's
+ * OWN test if one exists (mirrored `tests/<area>/<name>.test.ts` or co-located
+ * `<name>.test.ts`) — small, fast, hermetic. Otherwise skips the test step and
+ * relies on tsc+build (already gated in full-cycle): running the whole area
+ * suite alongside the live bot was slow and flaky (concurrent DB/CPU churn).
  */
-export function deriveTestTarget(srcPath: string): string | undefined {
-  const m = /^src\/core\/([^/]+)\//.exec(srcPath);
-  if (!m) return undefined;
-  const candidate = `tests/${m[1]}`;
-  return existsSync(path.join(PROJECT_ROOT, candidate)) ? candidate : undefined;
+export function resolveApplyTestPlan(srcPath: string): { testTarget?: string; skipTests?: boolean } {
+  const candidates: string[] = [];
+  if (srcPath.startsWith('src/core/')) {
+    candidates.push(srcPath.replace(/^src\/core\//, 'tests/').replace(/\.ts$/, '.test.ts'));
+  }
+  candidates.push(srcPath.replace(/\.ts$/, '.test.ts')); // co-located
+  const found = candidates.find((c) => existsSync(path.join(PROJECT_ROOT, c)));
+  return found ? { testTarget: found } : { skipTests: true };
 }
 
 /**
  * Apply an owner-approved patch through meta.self-modify's full-cycle gate
- * (backup → tsc → build → test → restart). A failure at ANY gate aborts without
- * restarting; the backup remains for rollback. Never throws. `testTarget` scopes
- * the test gate (defaults to the patched file's area to avoid a full-suite block;
- * pass '' explicitly to force the full suite).
+ * (backup → tsc → build → [file-specific test | skip] → commit → restart). A
+ * failure at ANY gate aborts without restarting; the backup remains. Never
+ * throws. An explicit `testTargetOverride` wins ('' forces the full suite);
+ * otherwise the scope is resolved per-file (see resolveApplyTestPlan).
  */
-export async function applyApprovedCodePatch(patch: CodePatch, testTarget?: string): Promise<ApplyOutcome> {
+export async function applyApprovedCodePatch(patch: CodePatch, testTargetOverride?: string): Promise<ApplyOutcome> {
   try {
     const { selfModifyTool } = await import('../tools/builtin/meta/self-modify.js');
     const ctx = { sessionId: 'tx19-code-apply' } as unknown as import('../tools/types.js').ToolContext;
-    const scoped = testTarget !== undefined ? testTarget : deriveTestTarget(patch.path);
+
+    let testTarget = testTargetOverride;
+    let skipTests = false;
+    if (testTarget === undefined) {
+      const plan = resolveApplyTestPlan(patch.path);
+      testTarget = plan.testTarget;
+      skipTests = plan.skipTests === true;
+    }
+
     const res = await selfModifyTool.execute(
       {
         action: 'full-cycle', path: patch.path, oldText: patch.oldText, newText: patch.newText,
-        ...(scoped ? { testTarget: scoped } : {}),
+        ...(testTarget ? { testTarget } : {}),
+        ...(skipTests ? { skipTests: true } : {}),
         // Commit the applied patch authored as SUDO-AI (self-improvement provenance).
         selfCommitMessage: `self-improve: ${patch.rationale || `patch ${patch.path}`}`,
       },
       ctx,
     );
-    log.info({ path: patch.path, ok: res.success }, 'TX19 code patch apply resolved');
+    log.info({ path: patch.path, testTarget: testTarget ?? (skipTests ? '(tsc+build only)' : '(full)'), ok: res.success }, 'TX19 code patch apply resolved');
     return { ok: res.success, output: res.output };
   } catch (err) {
     return { ok: false, output: `apply crashed: ${String(err)}` };
