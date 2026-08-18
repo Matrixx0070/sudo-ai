@@ -41,7 +41,7 @@ export interface CodePatch {
   oldText: string;
   /** Replacement. */
   newText: string;
-  /** One-line why. */
+  /** One-line rationale for the change. */
   rationale: string;
 }
 
