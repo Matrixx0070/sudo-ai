@@ -17,14 +17,15 @@
  *     tsc+build+test gate; a failure aborts without restart (backup remains).
  */
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { PROJECT_ROOT, WORKSPACE_DIR } from '../shared/paths.js';
-import { isProtectedPath } from '../self-build/protected-paths.js';
 import { normalizeBrainText, type ToolBrain } from '../brain/brain-text.js';
 import { detectPatterns, type DetectedPatterns } from './pattern-detector.js';
+import { draftValidatedCodePatch } from './tx19-draft.js';
+
+export { draftValidatedCodePatch };
 
 const log = createLogger('self-improvement:tx19-code');
 
@@ -46,28 +47,6 @@ export interface CodePatch {
 
 const MAX_TEXT = 4000;
 
-function buildDraftPrompt(patterns: DetectedPatterns, learnings: string): string {
-  return [
-    'You are SUDO-AI proposing ONE small, safe improvement to your OWN source code.',
-    'Given the self-diagnosis below, output a SINGLE concrete patch as strict JSON:',
-    '{"path":"<repo-relative .ts file>","oldText":"<exact substring to replace>","newText":"<replacement>","rationale":"<one line>"}',
-    'Hard rules:',
-    '- oldText MUST be an exact, unique substring of the current file (copy it precisely).',
-    '- Keep it tiny and low-risk (a comment, a log message, a guard, a small fix).',
-    '- Never touch identity/constitution/protected paths, tests, or config.',
-    '- If you are not highly confident the oldText matches verbatim, output {"path":""} to decline.',
-    'Output ONLY the JSON object, nothing else.',
-    '',
-    '## Self-diagnosis',
-    `Health: ${patterns.healthScore}/100`,
-    patterns.failingTools.length ? `Failing tools: ${patterns.failingTools.map((t) => `${t.name} (${Math.round(t.failRate * 100)}%)`).join(', ')}` : 'No failing tools.',
-    patterns.badFeedbackTypes.length ? `Weak task types: ${patterns.badFeedbackTypes.map((b) => `${b.taskType} ${Math.round(b.badRate * 100)}% bad`).join(', ')}` : '',
-    '',
-    '## Recent learnings',
-    learnings.slice(0, 1500),
-  ].filter(Boolean).join('\n');
-}
-
 /** Parse + structurally validate a model patch. Returns null on any problem. */
 export function parseCodePatch(raw: string): CodePatch | null {
   const text = normalizeBrainText(raw);
@@ -81,78 +60,6 @@ export function parseCodePatch(raw: string): CodePatch | null {
   if (oldText.length > MAX_TEXT || newText.length > MAX_TEXT) return null;
   if (!p.endsWith('.ts') || p.includes('..')) return null;
   return { path: p, oldText, newText, rationale: typeof rationale === 'string' ? rationale : '' };
-}
-
-/** Resolve + guard a patch's target file. Returns absolute path or null. */
-function safeTarget(rel: string): string | null {
-  const abs = path.resolve(PROJECT_ROOT, rel);
-  if (!abs.startsWith(PROJECT_ROOT + path.sep)) return null;
-  const relNorm = path.relative(PROJECT_ROOT, abs);
-  if (isProtectedPath(relNorm)) return null;
-  if (/(^|\/)tests?\//.test(relNorm) || relNorm.startsWith('config/')) return null;
-  if (!existsSync(abs)) return null;
-  return abs;
-}
-
-/** True when oldText occurs EXACTLY ONCE in the file (safe, unambiguous edit). */
-function occursOnce(abs: string, oldText: string): boolean {
-  const content = readFileSync(abs, 'utf-8');
-  const first = content.indexOf(oldText);
-  return first >= 0 && content.indexOf(oldText, first + 1) === -1;
-}
-
-/**
- * Dry-run a patch: apply in place, `tsc --noEmit`, then ALWAYS restore. Returns
- * whether the project still typechecks. Never leaves the file modified.
- */
-export function dryRunTypecheck(abs: string, patch: CodePatch): { ok: boolean; detail: string } {
-  const original = readFileSync(abs, 'utf-8');
-  if (!original.includes(patch.oldText)) return { ok: false, detail: 'oldText not found' };
-  try {
-    writeFileSync(abs, original.replace(patch.oldText, patch.newText), 'utf-8');
-    try {
-      // Fixed argv, no shell — the target file was already validated non-protected.
-      execFileSync('npm', ['run', 'lint'], { cwd: PROJECT_ROOT, encoding: 'utf-8', timeout: 180_000, stdio: ['pipe', 'pipe', 'pipe'] });
-      return { ok: true, detail: 'tsc clean' };
-    } catch (err: unknown) {
-      const e = err as { stdout?: string; stderr?: string };
-      const out = `${e.stdout ?? ''}\n${e.stderr ?? ''}`;
-      return { ok: false, detail: out.includes('error TS') ? 'tsc errors' : 'lint failed' };
-    }
-  } finally {
-    writeFileSync(abs, original, 'utf-8'); // restore no matter what
-  }
-}
-
-/**
- * Draft ONE validated code patch, or null when nothing safe/buildable is found.
- * Never throws. The returned patch is guaranteed to exist verbatim, be
- * unambiguous, non-protected, and typecheck-clean when applied.
- */
-export async function draftValidatedCodePatch(
-  brain: ToolBrain,
-  patterns: DetectedPatterns,
-  learnings: string,
-): Promise<CodePatch | null> {
-  let patch: CodePatch | null;
-  try {
-    const raw = await brain.chat([{ role: 'user', content: buildDraftPrompt(patterns, learnings) }]);
-    patch = parseCodePatch(raw);
-  } catch (err) {
-    log.debug({ err: String(err) }, 'code-patch draft call failed');
-    return null;
-  }
-  if (!patch) return null;
-
-  const abs = safeTarget(patch.path);
-  if (!abs) { log.info({ path: patch.path }, 'code-patch declined: unsafe/protected/missing target'); return null; }
-  if (!occursOnce(abs, patch.oldText)) { log.info({ path: patch.path }, 'code-patch declined: oldText not a unique match'); return null; }
-
-  const dry = dryRunTypecheck(abs, patch);
-  if (!dry.ok) { log.info({ path: patch.path, detail: dry.detail }, 'code-patch declined: dry-run typecheck failed'); return null; }
-
-  log.info({ path: patch.path, rationale: patch.rationale }, 'code-patch drafted + dry-run typecheck clean');
-  return patch;
 }
 
 /** Minimal checkpoint seam so this module need not import the telegram stack. */
