@@ -28,7 +28,7 @@ import { detectPatterns, type DetectedPatterns } from './pattern-detector.js';
 
 const log = createLogger('self-improvement:tx19-code');
 
-/** DEFAULT OFF — the nightly drafts code patches only when explicitly enabled. */
+/** DEFAULT OFF — the nightly drafts code patches only when SUDO_TX19_CODE=1. */
 export function codeSelfImproveEnabled(): boolean {
   return process.env['SUDO_TX19_CODE'] === '1';
 }
