@@ -7,7 +7,16 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildTestArgs } from '../../src/core/tools/builtin/meta/self-modify.js';
+import { buildTestArgs, buildTestSpawnArgs } from '../../src/core/tools/builtin/meta/self-modify.js';
+
+describe('buildTestSpawnArgs — isolation flags for the detached runner', () => {
+  it('runs files serially (low memory) with no target', () => {
+    expect(buildTestSpawnArgs('')).toEqual(['test', '--', '--no-file-parallelism']);
+  });
+  it('appends the validated target after the isolation flag', () => {
+    expect(buildTestSpawnArgs('tests/agent')).toEqual(['test', '--', '--no-file-parallelism', 'tests/agent']);
+  });
+});
 
 describe('buildTestArgs — full suite', () => {
   it('returns just ["test"] when no target is given', () => {

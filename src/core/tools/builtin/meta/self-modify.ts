@@ -28,6 +28,8 @@
 import type { ToolDefinition, ToolContext, ToolResult } from '../../types.js';
 import { createLogger } from '../../../shared/logger.js';
 import { execSync, execFileSync } from 'node:child_process';
+import { buildTestArgs, buildTestSpawnArgs, runTestDetached } from './self-modify-test-runner.js';
+export { buildTestArgs, buildTestSpawnArgs } from './self-modify-test-runner.js';
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
   appendFileSync, copyFileSync, realpathSync,
@@ -125,30 +127,14 @@ function runWithCode(cmd: string, args: string[], timeoutMs = 60_000): { code: n
   }
 }
 
-/** A vitest target is a path or filename glob — reject anything with shell metacharacters. */
-const TEST_TARGET_RE = /^[A-Za-z0-9_./*-]+$/;
-
-/**
- * Build the `npm test` argument array for an optional, validated vitest target.
- * Exported for unit testing the injection guard without executing the suite.
- */
-export function buildTestArgs(testTarget?: string): { args: string[] } | { error: string } {
-  const target = (testTarget ?? '').trim();
-  if (target && !TEST_TARGET_RE.test(target)) {
-    return { error: `Invalid testTarget "${target}". Only letters, digits and . _ - / * are allowed (a vitest path or filename pattern).` };
-  }
-  // `npm test -- <target>` → `vitest run <target>`; no target → full suite.
-  return { args: target ? ['test', '--', target] : ['test'] };
-}
-
-function doTest(testTarget?: string): ToolResult {
-  const built = buildTestArgs(testTarget);
+async function doTest(testTarget?: string): Promise<ToolResult> {
+  const built = buildTestArgs(testTarget); // validation / injection guard only
   if ('error' in built) return { success: false, output: built.error };
 
   const target = (testTarget ?? '').trim();
   const label = target ? ` (${target})` : ' (full suite)';
-  logger.info({ target: target || '(full suite)' }, 'Running test suite');
-  const { code, output } = runWithCode('npm', built.args, 300_000);
+  logger.info({ target: target || '(full suite)' }, 'Running test suite (detached, serial)');
+  const { code, output } = await runTestDetached(buildTestSpawnArgs(target), 300_000);
   const success = code === 0;
   logMod('test', success ? `OK${target ? ` ${target}` : ''}` : `FAILED${target ? ` ${target}` : ''} (exit ${code})`);
   return {
@@ -464,7 +450,7 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
   }
 
   // Step 3: Test — never restart into a fix that breaks the suite.
-  const testResult = doTest(testTarget);
+  const testResult = await doTest(testTarget);
   if (!testResult.success) {
     return {
       success: false,
@@ -644,7 +630,7 @@ export const selfModifyTool: ToolDefinition = {
           return doBuild();
 
         case 'test':
-          return doTest(params['testTarget'] as string | undefined);
+          return await doTest(params['testTarget'] as string | undefined);
 
         case 'restart':
           return doRestart();

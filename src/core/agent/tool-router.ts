@@ -95,7 +95,7 @@ type CategoryName =
   | 'research' | 'comms' | 'social' | 'marketing' | 'data'
   | 'meta' | 'dev' | 'github' | 'knowledge' | 'voice' | 'business'
   | 'finance' | 'personal' | 'pm' | 'earning' | 'learn' | 'legal'
-  | 'skill' | 'superpowers' | 'textproc';
+  | 'skill' | 'superpowers' | 'textproc' | 'computer';
 
 /**
  * Full category → routing rule map.
@@ -176,6 +176,20 @@ const CATEGORY_MAP: Record<CategoryName, CategoryRule> = {
     ],
     priority: 8,
     maxFromCategory: 8,
+  },
+  computer: {
+    // computer.* GUI/desktop automation (screenshot, perceive, click, type,
+    // key, scroll, window, session, run_plan) via the IComputerDriver backend.
+    // Distinct from `browser` (web pages) — this drives the actual desktop/OS.
+    keywords: [
+      'desktop', 'gui', 'on screen', 'on the screen', 'mouse', 'keyboard',
+      'click on', 'type into', 'window', 'application window', 'app window',
+      'perceive', 'accessibility tree', 'automate the desktop',
+      'control the computer', 'screenshot of the screen', 'run plan',
+    ],
+    patterns: [/computer[._]\w+/i, /\bdesktop\b/i, /\bgui\b/i, /on[- ]screen/i],
+    priority: 7,
+    maxFromCategory: 9,
   },
   system: {
     keywords: [
