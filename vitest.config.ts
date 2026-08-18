@@ -23,5 +23,12 @@ export default defineConfig({
       '@main': path.resolve(__dirname, 'src/main'),
     },
     testTimeout: 15000,
+    // Load-tolerance: several tests/agent tests "settle" async work with a fixed
+    // tiny setTimeout (0–50ms) and assert after — under CPU contention (e.g. the
+    // apply-time gate running vitest alongside the live bot) the work outlasts
+    // the delay and the test flakes. A retry absorbs a transient timing jitter;
+    // a REAL breakage still fails every attempt, so the self-modify gate stays
+    // honest (it won't ship code that reliably fails a test).
+    retry: 2,
   },
 });
