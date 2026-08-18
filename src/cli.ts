@@ -6214,7 +6214,16 @@ ${question}`, kb);
         const { HeldOutGate } = await import('./core/learning/held-out-gate.js');
         const { TraceStore } = await import('./core/learning/trace-store.js');
         const gate = new HeldOutGate(new TraceStore(path.join(DATA_DIR, 'traces.db')));
-        const r = await runSelfImprovement({ trigger: 'tx19-overnight', heldOutGate: gate });
+        // Wire the same brain seams the manual meta.self-improve tool uses, so
+        // the UNATTENDED nightly run also measures itself: autoRater grades
+        // recent unrated tasks (SUDO_AUTO_FEEDBACK=0 disables) and taskClassifier
+        // refines coarse 'general' labels before detection.
+        const r = await runSelfImprovement({
+          trigger: 'tx19-overnight',
+          heldOutGate: gate,
+          taskClassifier: brain,
+          autoRater: brain,
+        });
         return { healthScore: r.healthScore, summary: r.summary, actions: r.actions.map((a) => ({ type: a.type, description: a.description, applied: a.applied })) };
       };
       const scheduleTx19 = (): NodeJS.Timeout => {
