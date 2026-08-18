@@ -10,11 +10,15 @@ import { describe, it, expect } from 'vitest';
 import { buildTestArgs, buildTestSpawnArgs } from '../../src/core/tools/builtin/meta/self-modify.js';
 
 describe('buildTestSpawnArgs — isolation flags for the detached runner', () => {
-  it('runs files serially (low memory) with no target', () => {
-    expect(buildTestSpawnArgs('')).toEqual(['test', '--', '--no-file-parallelism']);
+  it('runs files serially (low memory) with no targets', () => {
+    expect(buildTestSpawnArgs([])).toEqual(['test', '--', '--no-file-parallelism']);
   });
-  it('appends the validated target after the isolation flag', () => {
-    expect(buildTestSpawnArgs('tests/agent')).toEqual(['test', '--', '--no-file-parallelism', 'tests/agent']);
+  it('appends each validated target after the isolation flag', () => {
+    expect(buildTestSpawnArgs(['tests/feedback/a.test.ts', 'tests/feedback/b.test.ts']))
+      .toEqual(['test', '--', '--no-file-parallelism', 'tests/feedback/a.test.ts', 'tests/feedback/b.test.ts']);
+  });
+  it('drops blank/whitespace targets', () => {
+    expect(buildTestSpawnArgs(['', '  ', 'tests/x.test.ts'])).toEqual(['test', '--', '--no-file-parallelism', 'tests/x.test.ts']);
   });
 });
 

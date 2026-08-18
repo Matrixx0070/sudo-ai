@@ -17,7 +17,7 @@
  *     tsc+build+test gate; a failure aborts without restart (backup remains).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../shared/logger.js';
 import { PROJECT_ROOT, WORKSPACE_DIR } from '../shared/paths.js';
@@ -106,21 +106,57 @@ export async function runCodeSelfImproveCycle(
 
 export interface ApplyOutcome { ok: boolean; output: string }
 
+/** Max importing-test files to run at apply time (bounds a widely-imported file). */
+const MAX_IMPORTER_TESTS = 20;
+
 /**
- * Resolve the apply-time test scope for a patched source file. Runs the file's
- * OWN test if one exists (mirrored `tests/<area>/<name>.test.ts` or co-located
- * `<name>.test.ts`) — small, fast, hermetic. Otherwise skips the test step and
- * relies on tsc+build (already gated in full-cycle): running the whole area
- * suite alongside the live bot was slow and flaky (concurrent DB/CPU churn).
+ * Find test files that IMPORT the patched source module. Tests import it via a
+ * relative path (`../../src/core/feedback/store.js`) or the `@core` alias
+ * (`@core/feedback/store.js`); both contain the suffix `core/feedback/store.js`,
+ * so that substring is the needle. Walks tests/ once (fast). Capped.
  */
-export function resolveApplyTestPlan(srcPath: string): { testTarget?: string; skipTests?: boolean } {
-  const candidates: string[] = [];
+function findImportingTests(srcPath: string): string[] {
+  const needle = srcPath.replace(/^src\//, '').replace(/\.ts$/, '.js'); // e.g. core/feedback/store.js
+  const out: string[] = [];
+  const walk = (relDir: string): void => {
+    if (out.length >= MAX_IMPORTER_TESTS) return;
+    let entries: import('node:fs').Dirent[];
+    try { entries = readdirSync(path.join(PROJECT_ROOT, relDir), { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.length >= MAX_IMPORTER_TESTS) return;
+      const rel = path.join(relDir, e.name);
+      if (e.isDirectory()) { if (e.name !== 'node_modules') walk(rel); }
+      else if (e.name.endsWith('.test.ts')) {
+        try { if (readFileSync(path.join(PROJECT_ROOT, rel), 'utf-8').includes(needle)) out.push(rel); } catch { /* skip */ }
+      }
+    }
+  };
+  walk('tests');
+  return out;
+}
+
+/**
+ * Resolve the apply-time test scope for a patched source file:
+ *   1. the file's OWN test (mirrored `tests/<area>/<name>.test.ts` or co-located),
+ *   2. else every test that IMPORTS the file (its real coverage, even when named
+ *      differently — e.g. store.ts ← feedback-linkage.test.ts),
+ *   3. else skip the test step and rely on tsc+build (already gated).
+ * Runs exactly the relevant test FILES — never the whole area suite, which was
+ * slow and flaky alongside the live bot.
+ */
+export function resolveApplyTestPlan(srcPath: string): { testTargets?: string[]; skipTests?: boolean } {
+  const named: string[] = [];
   if (srcPath.startsWith('src/core/')) {
-    candidates.push(srcPath.replace(/^src\/core\//, 'tests/').replace(/\.ts$/, '.test.ts'));
+    named.push(srcPath.replace(/^src\/core\//, 'tests/').replace(/\.ts$/, '.test.ts'));
   }
-  candidates.push(srcPath.replace(/\.ts$/, '.test.ts')); // co-located
-  const found = candidates.find((c) => existsSync(path.join(PROJECT_ROOT, c)));
-  return found ? { testTarget: found } : { skipTests: true };
+  named.push(srcPath.replace(/\.ts$/, '.test.ts')); // co-located
+  const exact = named.find((c) => existsSync(path.join(PROJECT_ROOT, c)));
+  if (exact) return { testTargets: [exact] };
+
+  const importers = findImportingTests(srcPath);
+  if (importers.length > 0) return { testTargets: importers };
+
+  return { skipTests: true };
 }
 
 /**
@@ -135,25 +171,27 @@ export async function applyApprovedCodePatch(patch: CodePatch, testTargetOverrid
     const { selfModifyTool } = await import('../tools/builtin/meta/self-modify.js');
     const ctx = { sessionId: 'tx19-code-apply' } as unknown as import('../tools/types.js').ToolContext;
 
-    let testTarget = testTargetOverride;
+    let testTargets: string[] = [];
     let skipTests = false;
-    if (testTarget === undefined) {
+    if (testTargetOverride !== undefined) {
+      testTargets = testTargetOverride ? [testTargetOverride] : []; // '' → full suite
+    } else {
       const plan = resolveApplyTestPlan(patch.path);
-      testTarget = plan.testTarget;
-      skipTests = plan.skipTests === true;
+      if (plan.skipTests) skipTests = true;
+      else testTargets = plan.testTargets ?? [];
     }
 
     const res = await selfModifyTool.execute(
       {
         action: 'full-cycle', path: patch.path, oldText: patch.oldText, newText: patch.newText,
-        ...(testTarget ? { testTarget } : {}),
+        ...(testTargets.length ? { testTargets } : {}),
         ...(skipTests ? { skipTests: true } : {}),
         // Commit the applied patch authored as SUDO-AI (self-improvement provenance).
         selfCommitMessage: `self-improve: ${patch.rationale || `patch ${patch.path}`}`,
       },
       ctx,
     );
-    log.info({ path: patch.path, testTarget: testTarget ?? (skipTests ? '(tsc+build only)' : '(full)'), ok: res.success }, 'TX19 code patch apply resolved');
+    log.info({ path: patch.path, testTargets: testTargets.length ? testTargets : (skipTests ? '(tsc+build only)' : '(full)'), ok: res.success }, 'TX19 code patch apply resolved');
     return { ok: res.success, output: res.output };
   } catch (err) {
     return { ok: false, output: `apply crashed: ${String(err)}` };

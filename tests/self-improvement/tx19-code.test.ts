@@ -13,11 +13,17 @@ describe('resolveApplyTestPlan — scope the apply gate per file', () => {
   it('PLAN-1: runs the mirrored file-specific test when it exists', () => {
     // tests/self-improvement/tx19-code.test.ts (this file) exists.
     expect(resolveApplyTestPlan('src/core/self-improvement/tx19-code.ts'))
-      .toEqual({ testTarget: 'tests/self-improvement/tx19-code.test.ts' });
+      .toEqual({ testTargets: ['tests/self-improvement/tx19-code.test.ts'] });
   });
-  it('PLAN-2: skips tests (tsc+build only) when no file-specific test exists', () => {
-    // loop-guard.ts has no dedicated test file → skip, do not run the whole area.
-    expect(resolveApplyTestPlan('src/core/agent/loop-guard.ts')).toEqual({ skipTests: true });
+  it('PLAN-2: else runs the tests that IMPORT the file (real coverage, differently named)', () => {
+    // feedback/store.ts has no store.test.ts, but is imported by the feedback tests.
+    const plan = resolveApplyTestPlan('src/core/feedback/store.ts');
+    expect(plan.skipTests).toBeUndefined();
+    expect(plan.testTargets).toContain('tests/feedback/feedback-linkage.test.ts');
+    expect(plan.testTargets!.every((t) => t.endsWith('.test.ts'))).toBe(true);
+  });
+  it('PLAN-3: skips (tsc+build only) when nothing names or imports the file', () => {
+    expect(resolveApplyTestPlan('src/core/nonexistent-xyz/never-imported.ts')).toEqual({ skipTests: true });
   });
 });
 

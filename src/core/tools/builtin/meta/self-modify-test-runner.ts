@@ -33,12 +33,14 @@ export function buildTestArgs(testTarget?: string): { args: string[] } | { error
 }
 
 /**
- * The actual vitest argv for the apply-time gate. buildTestArgs still validates
- * the target; this adds `--no-file-parallelism` (run files serially → low peak
- * memory). The target was already regex-validated upstream.
+ * The actual vitest argv for the apply-time gate. Targets are already
+ * regex-validated upstream (buildTestArgs per target). Adds
+ * `--no-file-parallelism` (run files serially → low peak memory). Multiple
+ * targets run as multiple vitest positional filters; none → full suite.
  */
-export function buildTestSpawnArgs(target: string): string[] {
-  return ['test', '--', '--no-file-parallelism', ...(target ? [target] : [])];
+export function buildTestSpawnArgs(targets: string[]): string[] {
+  const clean = targets.map((t) => t.trim()).filter(Boolean);
+  return ['test', '--', '--no-file-parallelism', ...clean];
 }
 
 /**

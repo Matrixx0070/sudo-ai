@@ -127,22 +127,23 @@ function runWithCode(cmd: string, args: string[], timeoutMs = 60_000): { code: n
   }
 }
 
-async function doTest(testTarget?: string): Promise<ToolResult> {
-  const built = buildTestArgs(testTarget); // validation / injection guard only
-  if ('error' in built) return { success: false, output: built.error };
-
-  const target = (testTarget ?? '').trim();
-  const label = target ? ` (${target})` : ' (full suite)';
-  logger.info({ target: target || '(full suite)' }, 'Running test suite (detached, serial)');
-  const { code, output } = await runTestDetached(buildTestSpawnArgs(target), 300_000);
+async function doTest(testTargets: string[] = []): Promise<ToolResult> {
+  const clean = testTargets.map((t) => t.trim()).filter(Boolean);
+  for (const t of clean) {
+    const built = buildTestArgs(t); // per-target validation / injection guard
+    if ('error' in built) return { success: false, output: built.error };
+  }
+  const label = clean.length ? ` (${clean.join(', ')})` : ' (full suite)';
+  logger.info({ targets: clean.length ? clean : '(full suite)' }, 'Running test suite (detached, serial)');
+  const { code, output } = await runTestDetached(buildTestSpawnArgs(clean), 300_000);
   const success = code === 0;
-  logMod('test', success ? `OK${target ? ` ${target}` : ''}` : `FAILED${target ? ` ${target}` : ''} (exit ${code})`);
+  logMod('test', success ? `OK${clean.length ? ` ${clean.join(',')}` : ''}` : `FAILED${clean.length ? ` ${clean.join(',')}` : ''} (exit ${code})`);
   return {
     success,
     output: success
       ? `Tests passed${label}.\n${trim(output)}`
       : `Tests FAILED${label} (exit ${code}):\n${trim(output)}`,
-    data: { exitCode: code, target: target || null },
+    data: { exitCode: code, targets: clean },
   };
 }
 
@@ -431,7 +432,7 @@ function doSelfCommit(rawPath: string, subject: string): string {
   return 'committed as SUDO AI';
 }
 
-async function doFullCycle(rawPath: string, oldText: string, newText: string, replaceAll = false, testTarget?: string, selfCommitMessage?: string, skipTests = false): Promise<ToolResult> {
+async function doFullCycle(rawPath: string, oldText: string, newText: string, replaceAll = false, testTargets: string[] = [], selfCommitMessage?: string, skipTests = false): Promise<ToolResult> {
   if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
     return { success: false, output: 'meta.self-modify full-cycle is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
   }
@@ -454,7 +455,7 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
   let testResult: ToolResult | null = null;
   let testLine = '✓ Tests: skipped (no file-specific test — tsc+build gated)';
   if (!skipTests) {
-    testResult = await doTest(testTarget);
+    testResult = await doTest(testTargets);
     if (!testResult.success) {
       return {
         success: false,
@@ -636,7 +637,7 @@ export const selfModifyTool: ToolDefinition = {
           return doBuild();
 
         case 'test':
-          return await doTest(params['testTarget'] as string | undefined);
+          return await doTest(params['testTarget'] ? [params['testTarget'] as string] : []);
 
         case 'restart':
           return doRestart();
@@ -647,7 +648,8 @@ export const selfModifyTool: ToolDefinition = {
             (params['oldText'] as string | undefined) ?? '',
             (params['newText'] as string | undefined) ?? '',
             (params['replaceAll'] as boolean | undefined) ?? false,
-            params['testTarget'] as string | undefined,
+            (params['testTargets'] as string[] | undefined)
+              ?? (params['testTarget'] ? [params['testTarget'] as string] : []),
             params['selfCommitMessage'] as string | undefined,
             (params['skipTests'] as boolean | undefined) ?? false,
           );
