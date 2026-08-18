@@ -131,7 +131,12 @@ export async function applyApprovedCodePatch(patch: CodePatch, testTarget?: stri
     const ctx = { sessionId: 'tx19-code-apply' } as unknown as import('../tools/types.js').ToolContext;
     const scoped = testTarget !== undefined ? testTarget : deriveTestTarget(patch.path);
     const res = await selfModifyTool.execute(
-      { action: 'full-cycle', path: patch.path, oldText: patch.oldText, newText: patch.newText, ...(scoped ? { testTarget: scoped } : {}) },
+      {
+        action: 'full-cycle', path: patch.path, oldText: patch.oldText, newText: patch.newText,
+        ...(scoped ? { testTarget: scoped } : {}),
+        // Commit the applied patch authored as SUDO-AI (self-improvement provenance).
+        selfCommitMessage: `self-improve: ${patch.rationale || `patch ${patch.path}`}`,
+      },
       ctx,
     );
     log.info({ path: patch.path, ok: res.success }, 'TX19 code patch apply resolved');

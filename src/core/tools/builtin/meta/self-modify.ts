@@ -426,7 +426,26 @@ function doRestart(verifiedBuildTest = false): ToolResult {
   };
 }
 
-async function doFullCycle(rawPath: string, oldText: string, newText: string, replaceAll = false, testTarget?: string): Promise<ToolResult> {
+/**
+ * Commit the applied file authored + tagged as SUDO-AI, so self-improvements are
+ * version-controlled and attributed to the agent (not left as an anonymous
+ * uncommitted diff). Committer stays the repo's git identity; author + trailer
+ * are SUDO-AI. Best-effort — returns a note; never throws.
+ */
+function doSelfCommit(rawPath: string, subject: string): string {
+  const abs = resolveProjectPath(rawPath);
+  if (!abs) return 'commit skipped: unresolved path';
+  const rel = path.relative(PROJECT_ROOT, abs);
+  const add = runWithCode('git', ['add', '--', rel]);
+  if (add.code !== 0) return `commit skipped: git add failed (${add.output.slice(0, 120)})`;
+  const message = `${subject}\n\nGenerated with SUDO AI\nCo-Authored-By: SUDO AI <noreply@sudo-ai.local>`;
+  const c = runWithCode('git', ['commit', '--author=SUDO AI <noreply@sudo-ai.local>', '-m', message]);
+  if (c.code !== 0) return `commit failed (${c.output.slice(0, 160)})`;
+  logMod('self-commit', rel);
+  return 'committed as SUDO AI';
+}
+
+async function doFullCycle(rawPath: string, oldText: string, newText: string, replaceAll = false, testTarget?: string, selfCommitMessage?: string): Promise<ToolResult> {
   if (process.env['SUDO_SELF_BUILD_MODE'] === '1') {
     return { success: false, output: 'meta.self-modify full-cycle is blocked while SUDO_SELF_BUILD_MODE=1. The self-build orchestrator controls build/restart.' };
   }
@@ -454,6 +473,11 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
     };
   }
 
+  // Step 3b: commit as SUDO-AI (provenance) BEFORE restart, so the change is
+  // captured even if the restart interrupts. Only when a message is provided
+  // (the TX19 self-improvement path); normal self-modify edits stay uncommitted.
+  const commitNote = selfCommitMessage ? `\n✓ Commit: ${doSelfCommit(rawPath, selfCommitMessage)}` : '';
+
   // Step 4: Restart — build and tests both just passed above in this same
   // call, so this is the one path allowed to opt into the gated-restart
   // exception (still requires the operator to have set SUDO_ALLOW_GATED_RESTART=1;
@@ -462,7 +486,7 @@ async function doFullCycle(rawPath: string, oldText: string, newText: string, re
 
   return {
     success: restartResult.success,
-    output: `DONE!\n\n✓ Edit: ${editResult.output}\n✓ Build: success\n✓ Tests: passed\n${restartResult.success ? '✓ Restart: online' : '⚠ Restart: ' + restartResult.output}`,
+    output: `DONE!\n\n✓ Edit: ${editResult.output}\n✓ Build: success\n✓ Tests: passed${commitNote}\n${restartResult.success ? '✓ Restart: online' : '⚠ Restart: ' + restartResult.output}`,
     data: { editResult, buildResult, testResult, restartResult },
   };
 }
@@ -632,6 +656,7 @@ export const selfModifyTool: ToolDefinition = {
             (params['newText'] as string | undefined) ?? '',
             (params['replaceAll'] as boolean | undefined) ?? false,
             params['testTarget'] as string | undefined,
+            params['selfCommitMessage'] as string | undefined,
           );
 
         case 'history':
