@@ -9,7 +9,7 @@
  *                fixes tool descriptions, writes self_improvements log
  *  4. VERIFY   — Schedules a follow-up check 7 days later
  *
- * Conservative approach: engine only touches workspace/ files and DB.
+ * Conservative approach: engine only touches workspace/ files and the mind.db database.
  * It does NOT auto-patch TypeScript source — it drafts patches and
  * writes them to data/improvement-drafts/ for meta.self-modify to apply.
  */
