@@ -29,6 +29,17 @@ import {
   type TerminationLegacyDeps,
 } from '../../src/core/agent/termination-legacy.js';
 
+/**
+ * The path-traversal guard's safe root (mirrors termination-legacy.ts: it uses
+ * `process.env.DATA_DIR` resolved, else the default). Deriving test dirs from
+ * this — instead of hardcoding `<cwd>/data` — keeps these tests passing when the
+ * run is isolated to a fresh DATA_DIR (e.g. the self-modify apply gate).
+ */
+const safeRoot = (): string => {
+  const env = process.env['DATA_DIR'];
+  return env ? path.resolve(env) : path.resolve(process.cwd(), 'data');
+};
+
 // ---------------------------------------------------------------------------
 // Mock GoalEngineV2 helpers
 // ---------------------------------------------------------------------------
@@ -102,7 +113,7 @@ describe('runTerminationLegacy', () => {
 
     const result: LegacySnapshot = await runTerminationLegacy({
       goalEngine: engine,
-      dataDir: path.resolve(process.cwd(), 'data'),
+      dataDir: safeRoot(),
     });
 
     expect(result.sessionsScanned).toBe(3);
@@ -124,7 +135,7 @@ describe('runTerminationLegacy', () => {
 
     const result = await runTerminationLegacy({
       goalEngine: engine,
-      dataDir: path.resolve(process.cwd(), 'data'),
+      dataDir: safeRoot(),
     });
 
     expect(result.insights).toHaveLength(2);
@@ -150,7 +161,7 @@ describe('runTerminationLegacy', () => {
 
     await runTerminationLegacy({
       goalEngine: engine,
-      dataDir: path.resolve(process.cwd(), 'data'),
+      dataDir: safeRoot(),
     });
 
     // Expect: write, rename, write, rename (legacy.md then pending-for-human.md)
@@ -170,7 +181,7 @@ describe('runTerminationLegacy', () => {
 
     const result = await runTerminationLegacy({
       goalEngine: engine,
-      dataDir: path.resolve(process.cwd(), 'data'),
+      dataDir: safeRoot(),
     });
 
     expect(result.deferredGoals).toHaveLength(2);
@@ -188,7 +199,7 @@ describe('runTerminationLegacy', () => {
 
     const result = await runTerminationLegacy({
       goalEngine: engine,
-      dataDir: path.resolve(process.cwd(), 'data'),
+      dataDir: safeRoot(),
     });
 
     expect(result.sessionsScanned).toBe(0);
@@ -205,7 +216,7 @@ describe('runTerminationLegacy', () => {
 
     const result = await runTerminationLegacy({
       goalEngine: engine,
-      dataDir: path.resolve(process.cwd(), 'data'),
+      dataDir: safeRoot(),
     });
 
     expect(result.deferredGoals).toEqual([]);
@@ -217,7 +228,7 @@ describe('runTerminationLegacy', () => {
 
   it('A-7: dataDir option overrides default path (within safe root)', async () => {
     const engine = makeMockEngine({ sleepGoals: [], activeGoals: [] });
-    const safeSubDir = path.resolve(process.cwd(), 'data', 'custom-subdir');
+    const safeSubDir = path.join(safeRoot(), 'custom-subdir');
 
     const result = await runTerminationLegacy({
       goalEngine: engine,
@@ -246,7 +257,7 @@ describe('runTerminationLegacy', () => {
     await expect(async () => {
       result = await runTerminationLegacy({
         goalEngine: engine,
-        dataDir: path.resolve(process.cwd(), 'data'),
+        dataDir: safeRoot(),
       });
     }).not.toThrow();
 
@@ -281,7 +292,7 @@ describe('runTerminationLegacy — insight suffixes', () => {
 
     const result = await runTerminationLegacy({
       goalEngine: engine,
-      dataDir: path.resolve(process.cwd(), 'data'),
+      dataDir: safeRoot(),
     });
 
     expect(result.insights[0]).toContain('all milestones met');
@@ -295,7 +306,7 @@ describe('runTerminationLegacy — insight suffixes', () => {
 
     const result = await runTerminationLegacy({
       goalEngine: engine,
-      dataDir: path.resolve(process.cwd(), 'data'),
+      dataDir: safeRoot(),
     });
 
     expect(result.insights[0]).toContain('low-progress goal — review priority');
@@ -306,7 +317,7 @@ describe('runTerminationLegacy — insight suffixes', () => {
 
     const result = await runTerminationLegacy({
       goalEngine: engine,
-      dataDir: path.resolve(process.cwd(), 'data'),
+      dataDir: safeRoot(),
     });
 
     expect(result.sessionsScanned).toBe(0);
@@ -352,7 +363,7 @@ describe('runTerminationLegacy — path traversal guard', () => {
       sleepGoals: [makeGoal({ id: 'g1' }), makeGoal({ id: 'g2' })],
       activeGoals: [makeGoal({ id: 'a1', status: 'active' })],
     });
-    const safeDir = path.resolve(process.cwd(), 'data');
+    const safeDir = safeRoot();
 
     const result = await runTerminationLegacy({
       goalEngine: engine,

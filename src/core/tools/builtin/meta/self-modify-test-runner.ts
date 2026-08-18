@@ -11,6 +11,9 @@
  */
 
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { PROJECT_ROOT } from '../../../shared/paths.js';
 
 /** A vitest target is a path or filename glob — reject anything with shell metacharacters. */
@@ -42,27 +45,47 @@ export function buildTestSpawnArgs(target: string): string[] {
  * Run the suite in a DETACHED child process group with a capped heap, async.
  * Detached + own group lets us kill the whole vitest tree on timeout without
  * cross-signalling the bot.
+ *
+ * ISOLATED DATA_DIR: the gate runs alongside the LIVE bot, which is concurrently
+ * writing mind.db/traces.db/checkpoints.db under the real DATA_DIR. State-reading
+ * tests (veto-gate, outcome-learner…) would see that churn and fail — not a
+ * timing flake, so retry can't help. Pointing the run at a fresh temp DATA_DIR
+ * makes those tests hermetic; the dir is removed when the run finishes.
  */
 export function runTestDetached(args: string[], timeoutMs: number): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
     let out = '';
     const cap = (b: Buffer): void => { out += b.toString(); if (out.length > 200_000) out = out.slice(-200_000); };
+
+    let isoDataDir: string | null = null;
+    try { isoDataDir = mkdtempSync(path.join(tmpdir(), 'sudo-apply-gate-')); } catch { /* fall back to inherited DATA_DIR */ }
+    const cleanup = (): void => {
+      if (!isoDataDir) return;
+      try { rmSync(isoDataDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      isoDataDir = null;
+    };
+    const done = (result: { code: number; output: string }): void => { cleanup(); resolve(result); };
+
     const child = spawn('npm', args, {
       cwd: PROJECT_ROOT,
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} --max-old-space-size=1024`.trim() },
+      env: {
+        ...process.env,
+        ...(isoDataDir ? { DATA_DIR: isoDataDir } : {}),
+        NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} --max-old-space-size=1024`.trim(),
+      },
     });
     child.stdout?.on('data', cap);
     child.stderr?.on('data', cap);
     const timer = setTimeout(() => {
       try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch { /* group already gone */ }
-      resolve({ code: 124, output: `${out}\n[test run timed out after ${timeoutMs}ms — killed]` });
+      done({ code: 124, output: `${out}\n[test run timed out after ${timeoutMs}ms — killed]` });
     }, timeoutMs);
     child.on('close', (code, signal) => {
       clearTimeout(timer);
-      resolve({ code: typeof code === 'number' ? code : (signal ? 124 : 1), output: out });
+      done({ code: typeof code === 'number' ? code : (signal ? 124 : 1), output: out });
     });
-    child.on('error', (err) => { clearTimeout(timer); resolve({ code: 1, output: `spawn failed: ${String(err)}` }); });
+    child.on('error', (err) => { clearTimeout(timer); done({ code: 1, output: `spawn failed: ${String(err)}` }); });
   });
 }
