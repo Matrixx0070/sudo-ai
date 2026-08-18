@@ -6231,9 +6231,22 @@ ${question}`, kb);
         const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), t19.overnightHourUtc(), 0, 0));
         if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
         return setTimeout(() => {
-          void t19.runOvernightCycle(engine, new Date().toISOString().slice(0, 10))
-            .catch((err) => log.warn({ err: String(err) }, 'TX19: cycle crashed'))
-            .finally(() => { tx19Timer = scheduleTx19(); });
+          const date = new Date().toISOString().slice(0, 10);
+          void (async () => {
+            try {
+              await t19.runOvernightCycle(engine, date);
+              // Optional CODE self-improvement (SUDO_TX19_CODE=1, default OFF):
+              // draft ONE validated patch → owner Deploy card → apply on tap.
+              const { runCodeSelfImproveCycle } = await import('./core/self-improvement/tx19-code.js');
+              const { getCheckpointProtocol } = await import('./core/channels/checkpoint-registry.js');
+              const proto = getCheckpointProtocol();
+              if (proto) await runCodeSelfImproveCycle(brain, proto, date);
+            } catch (err) {
+              log.warn({ err: String(err) }, 'TX19: cycle crashed');
+            } finally {
+              tx19Timer = scheduleTx19();
+            }
+          })();
         }, next.getTime() - now.getTime());
       };
       let tx19Timer = scheduleTx19();

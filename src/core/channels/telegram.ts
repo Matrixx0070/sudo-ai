@@ -57,6 +57,7 @@ const log = createLogger('channels:telegram');
 import { chunkText, TELEGRAM_CHUNK_LIMIT, MD_SOURCE_CHUNK_LIMIT } from './long-reply.js';
 import { renderMdWithinLimit } from './telegram-format.js';
 import { getCheckpointProtocol } from './checkpoint-registry.js';
+import { parseCheckpointCallback } from './checkpoint-protocol.js';
 import {
   handleRunControlCallback,
   makeReasonKeyboard,
@@ -1004,9 +1005,26 @@ export class TelegramAdapter implements ChannelAdapter {
           return;
         }
         const proto = getCheckpointProtocol();
+        const parsedCp = proto ? parseCheckpointCallback(data) : null;
         const handled = proto ? proto.handleCallback(data, String(ctx.from.id)) : false;
         await ctx.answerCallbackQuery({ text: handled ? 'Recorded ✅' : 'Checkpoint unavailable/decided.', show_alert: false });
         try { await ctx.editMessageReplyMarkup({ reply_markup: undefined }); } catch { /* keyboard may be gone */ }
+        // TX19 CODE: a Deploy tap on a code checkpoint applies the persisted
+        // patch through the full-cycle gate (backup→tsc→build→test→restart).
+        if (handled && proto && parsedCp) {
+          try {
+            const row = proto.get(parsedCp.checkpointId);
+            const patch = row?.context?.['patch'] as { path: string; oldText: string; newText: string; rationale: string } | undefined;
+            if (row?.kind === 'tx19:deploy-code' && row.decision === 'Deploy' && patch) {
+              await ctx.reply(`🔧 Applying patch to ${patch.path} — running tsc + build + test…`);
+              const { applyApprovedCodePatch } = await import('../self-improvement/tx19-code.js');
+              const outcome = await applyApprovedCodePatch(patch);
+              await ctx.reply(outcome.ok ? `✅ Applied ${patch.path}.\n${outcome.output.slice(0, 500)}` : `❌ Not applied — gate failed.\n${outcome.output.slice(0, 800)}`);
+            }
+          } catch (err) {
+            log.warn({ err: String(err) }, 'TX19 code apply-on-tap failed');
+          }
+        }
         return;
       }
 
