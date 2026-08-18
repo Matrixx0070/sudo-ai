@@ -162,8 +162,9 @@ export class LoopGuard {
   reset(): void {
     this.history = [];
     this.repeatCounts.clear();
+    const priorCalls = this.totalCalls;
     this.totalCalls = 0;
-    log.debug({}, 'LoopGuard reset for new turn');
+    log.debug({ priorCalls }, 'LoopGuard reset for new turn');
   }
 
   /** Current total tool calls in this turn (for inspection). */
