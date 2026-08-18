@@ -1015,10 +1015,11 @@ export class TelegramAdapter implements ChannelAdapter {
           try {
             const row = proto.get(parsedCp.checkpointId);
             const patch = row?.context?.['patch'] as { path: string; oldText: string; newText: string; rationale: string } | undefined;
+            const testTarget = row?.context?.['testTarget'] as string | undefined;
             if (row?.kind === 'tx19:deploy-code' && row.decision === 'Deploy' && patch) {
               await ctx.reply(`🔧 Applying patch to ${patch.path} — running tsc + build + test…`);
               const { applyApprovedCodePatch } = await import('../self-improvement/tx19-code.js');
-              const outcome = await applyApprovedCodePatch(patch);
+              const outcome = await applyApprovedCodePatch(patch, testTarget);
               await ctx.reply(outcome.ok ? `✅ Applied ${patch.path}.\n${outcome.output.slice(0, 500)}` : `❌ Not applied — gate failed.\n${outcome.output.slice(0, 800)}`);
             }
           } catch (err) {

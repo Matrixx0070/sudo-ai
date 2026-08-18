@@ -200,16 +200,31 @@ export async function runCodeSelfImproveCycle(
 export interface ApplyOutcome { ok: boolean; output: string }
 
 /**
+ * Derive a scoped vitest target from a source path so the apply-time test gate
+ * does not block on the whole suite: src/core/<area>/… → tests/<area>. Returns
+ * undefined when there is no obvious scope (caller then runs the full suite).
+ */
+export function deriveTestTarget(srcPath: string): string | undefined {
+  const m = /^src\/core\/([^/]+)\//.exec(srcPath);
+  if (!m) return undefined;
+  const candidate = `tests/${m[1]}`;
+  return existsSync(path.join(PROJECT_ROOT, candidate)) ? candidate : undefined;
+}
+
+/**
  * Apply an owner-approved patch through meta.self-modify's full-cycle gate
  * (backup → tsc → build → test → restart). A failure at ANY gate aborts without
- * restarting; the backup remains for rollback. Never throws.
+ * restarting; the backup remains for rollback. Never throws. `testTarget` scopes
+ * the test gate (defaults to the patched file's area to avoid a full-suite block;
+ * pass '' explicitly to force the full suite).
  */
-export async function applyApprovedCodePatch(patch: CodePatch): Promise<ApplyOutcome> {
+export async function applyApprovedCodePatch(patch: CodePatch, testTarget?: string): Promise<ApplyOutcome> {
   try {
     const { selfModifyTool } = await import('../tools/builtin/meta/self-modify.js');
     const ctx = { sessionId: 'tx19-code-apply' } as unknown as import('../tools/types.js').ToolContext;
+    const scoped = testTarget !== undefined ? testTarget : deriveTestTarget(patch.path);
     const res = await selfModifyTool.execute(
-      { action: 'full-cycle', path: patch.path, oldText: patch.oldText, newText: patch.newText },
+      { action: 'full-cycle', path: patch.path, oldText: patch.oldText, newText: patch.newText, ...(scoped ? { testTarget: scoped } : {}) },
       ctx,
     );
     log.info({ path: patch.path, ok: res.success }, 'TX19 code patch apply resolved');

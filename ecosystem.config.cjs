@@ -306,7 +306,9 @@ module.exports = {
         // standalone `restart` action and every other restart path (self-update,
         // service-control) stay fully blocked regardless of this flag. Flip to
         // '1' only after deciding you trust build+test-gated self-restart.
-        SUDO_ALLOW_GATED_RESTART: process.env['SUDO_ALLOW_GATED_RESTART'] || '0',
+        // Enabled 2026-08-18 (Frank) so TX19 CODE self-improvement can go live on
+        // a Deploy tap — restart still requires build+test to have passed the cycle.
+        SUDO_ALLOW_GATED_RESTART: process.env['SUDO_ALLOW_GATED_RESTART'] || '1',
 
         // Raise V8 old-space heap: glm-5.2's large thinking-model contexts over
         // long drill turns OOM-crashed the ~4GB default heap (FATAL: JavaScript
@@ -729,6 +731,9 @@ module.exports = {
         // TX19 nightly gated self-improve → deploy card. Deploy taps only
         // record approval (AL8.6 auto-merge=NO); applying stays manual.
         SUDO_TX19_OVERNIGHT: process.env['SUDO_TX19_OVERNIGHT'] || '1',
+        // TX19 CODE self-improvement: nightly drafts ONE dry-run-validated patch
+        // → owner Deploy card → applies on tap via full-cycle. Enabled 2026-08-18.
+        SUDO_TX19_CODE: process.env['SUDO_TX19_CODE'] || '1',
         // AL1 per-run spend halt (#990) — OFF by Frank's decision 2026-08-05.
         // The $5 default assumed "well above any legit turn seen in the
         // ledger"; that stopped being true once long autonomous runs became the
