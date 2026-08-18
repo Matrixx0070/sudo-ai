@@ -70,8 +70,8 @@ export function dryRunTypecheck(abs: string, patch: CodePatch): { ok: boolean; d
   }
 }
 
-/** Recursively collect safe, non-protected src/core/*.ts candidate paths. */
-function listSafeCandidates(max = MAX_CANDIDATES): string[] {
+/** Recursively collect safe, non-protected src/core/*.ts candidate paths (minus excludes). */
+function listSafeCandidates(max = MAX_CANDIDATES, exclude?: Set<string>): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
     if (out.length >= max) return;
@@ -81,8 +81,9 @@ function listSafeCandidates(max = MAX_CANDIDATES): string[] {
       if (out.length >= max) return;
       const full = path.join(dir, ent.name);
       if (ent.isDirectory()) { if (ent.name !== 'node_modules') walk(full); }
-      else if (ent.name.endsWith('.ts') && !ent.name.endsWith('.test.ts') && safeTarget(path.relative(PROJECT_ROOT, full))) {
-        out.push(path.relative(PROJECT_ROOT, full));
+      else if (ent.name.endsWith('.ts') && !ent.name.endsWith('.test.ts')) {
+        const rel = path.relative(PROJECT_ROOT, full);
+        if (!exclude?.has(rel) && safeTarget(rel)) out.push(rel);
       }
     }
   };
@@ -160,8 +161,9 @@ export async function draftValidatedCodePatch(
   brain: ToolBrain,
   patterns: DetectedPatterns,
   learnings: string,
+  excludePaths?: Set<string>,
 ): Promise<CodePatch | null> {
-  const candidates = listSafeCandidates();
+  const candidates = listSafeCandidates(MAX_CANDIDATES, excludePaths);
   if (candidates.length === 0) return null;
 
   // Stage 1 — pick a real target file.

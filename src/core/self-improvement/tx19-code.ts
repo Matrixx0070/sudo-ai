@@ -62,16 +62,57 @@ export function parseCodePatch(raw: string): CodePatch | null {
   return { path: p, oldText, newText, rationale: typeof rationale === 'string' ? rationale : '' };
 }
 
-/** Minimal checkpoint seam so this module need not import the telegram stack. */
+/** Days a pending code Deploy card lingers before the nightly sweep expires it. */
+const CARD_TTL_DAYS = Number(process.env['SUDO_TX19_CARD_TTL_DAYS']) || 7;
+
+/**
+ * Minimal checkpoint seam so this module need not import the telegram stack.
+ * request() files a card; getPending()/expire() power the nightly hygiene sweep
+ * (optional so test fakes may omit them).
+ */
 export interface CheckpointFiler {
   request(req: { kind: string; question: string; options: string[]; context?: Record<string, unknown>; timeoutMs?: number }): Promise<unknown>;
+  getPending?(): Array<{ id: string; kind: string; context: Record<string, unknown> | null; createdAt: string }>;
+  expire?(checkpointId: string, reason?: string): boolean | void;
+}
+
+/** True if the repo file at relPath still contains `text` (i.e. the patch would still apply). */
+function fileHasText(relPath: string, text: string): boolean {
+  try { return readFileSync(path.join(PROJECT_ROOT, relPath), 'utf-8').includes(text); } catch { return false; }
 }
 
 /**
- * The nightly CODE step: draft ONE validated patch and file a Deploy card for
- * the owner. Fire-and-forget — the card is persisted + delivered; the owner's
- * later Deploy tap applies it (see the telegram tx10 hook). No-op when disabled
- * or when nothing safe/buildable is found. Never throws.
+ * Nightly hygiene: expire pending code Deploy cards that are AGED (> CARD_TTL_DAYS)
+ * or STALE (their oldText no longer exists in the file — a tap would fail to
+ * apply). Returns the set of file paths that STILL have a live pending card, so
+ * the drafter avoids proposing a duplicate. Never throws.
+ */
+export function expireStaleCards(filer: CheckpointFiler): Set<string> {
+  const live = new Set<string>();
+  try {
+    const cards = (filer.getPending?.() ?? []).filter((c) => c.kind === 'tx19:deploy-code');
+    for (const c of cards) {
+      const patch = (c.context?.['patch'] ?? null) as CodePatch | null;
+      const ageMs = Date.now() - Date.parse(c.createdAt);
+      const aged = Number.isFinite(ageMs) && ageMs > CARD_TTL_DAYS * 86_400_000;
+      const stale = !patch || !fileHasText(patch.path, patch.oldText);
+      if (aged || stale) {
+        filer.expire?.(c.id, stale ? 'stale: file changed since draft' : `aged out (>${CARD_TTL_DAYS}d)`);
+      } else if (patch) {
+        live.add(patch.path);
+      }
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, 'TX19 card hygiene sweep failed (non-fatal)');
+  }
+  return live;
+}
+
+/**
+ * The nightly CODE step: sweep stale/aged cards, then draft ONE validated patch
+ * and file a Deploy card — NEVER a duplicate of a file that already has a live
+ * pending card. Fire-and-forget delivery; the owner's later Deploy tap applies.
+ * The hygiene sweep runs even when drafting is disabled. Never throws.
  */
 export async function runCodeSelfImproveCycle(
   brain: ToolBrain,
@@ -79,6 +120,7 @@ export async function runCodeSelfImproveCycle(
   date: string,
   windowDays = 14,
 ): Promise<{ drafted: boolean; path?: string }> {
+  const livePending = expireStaleCards(filer); // hygiene always runs
   if (!codeSelfImproveEnabled()) return { drafted: false };
   try {
     let patterns: DetectedPatterns;
@@ -86,8 +128,13 @@ export async function runCodeSelfImproveCycle(
     let learnings = '';
     try { learnings = readFileSync(path.join(WORKSPACE_DIR, 'LEARNINGS.md'), 'utf-8'); } catch { /* optional */ }
 
-    const patch = await draftValidatedCodePatch(brain, patterns, learnings);
+    const patch = await draftValidatedCodePatch(brain, patterns, learnings, livePending);
     if (!patch) return { drafted: false };
+    // Dedup safety net: never file a second card for a file already pending.
+    if (livePending.has(patch.path)) {
+      log.info({ path: patch.path }, 'TX19 code card skipped — a pending card already targets this file');
+      return { drafted: false };
+    }
 
     // Fire-and-forget: persist + deliver the card; do NOT block on the tap.
     void filer.request({

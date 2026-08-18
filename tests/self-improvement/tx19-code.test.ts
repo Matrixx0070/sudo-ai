@@ -7,7 +7,36 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { parseCodePatch, renderCodeDeployCard, codeSelfImproveEnabled, resolveApplyTestPlan } from '../../src/core/self-improvement/tx19-code.js';
+import { parseCodePatch, renderCodeDeployCard, codeSelfImproveEnabled, resolveApplyTestPlan, expireStaleCards } from '../../src/core/self-improvement/tx19-code.js';
+
+describe('expireStaleCards — nightly card hygiene', () => {
+  const now = Date.now();
+  const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
+  // 'saveFeedback' is a stable identifier in feedback/store.ts (present verbatim).
+  const REAL = 'src/core/feedback/store.ts';
+
+  it('HYGIENE-1: expires aged + stale cards, keeps fresh, returns live paths; dedups by path', () => {
+    const expired: string[] = [];
+    const filer = {
+      request: async () => undefined,
+      getPending: () => [
+        { id: 'fresh', kind: 'tx19:deploy-code', createdAt: iso(1000), context: { patch: { path: REAL, oldText: 'saveFeedback', newText: 'x', rationale: '' } } },
+        { id: 'stale', kind: 'tx19:deploy-code', createdAt: iso(1000), context: { patch: { path: REAL, oldText: 'ZZ_NOT_PRESENT_ZZ', newText: 'x', rationale: '' } } },
+        { id: 'aged', kind: 'tx19:deploy-code', createdAt: iso(30 * 86_400_000), context: { patch: { path: REAL, oldText: 'saveFeedback', newText: 'x', rationale: '' } } },
+        { id: 'missingfile', kind: 'tx19:deploy-code', createdAt: iso(1000), context: { patch: { path: 'src/core/does-not-exist.ts', oldText: 'x', newText: 'y', rationale: '' } } },
+        { id: 'other', kind: 'mission:phase', createdAt: iso(1000), context: null },
+      ],
+      expire: (id: string) => { expired.push(id); return true; },
+    };
+    const live = expireStaleCards(filer as never);
+    expect(expired.sort()).toEqual(['aged', 'missingfile', 'stale']); // fresh + non-code untouched
+    expect([...live]).toEqual([REAL]); // only the fresh card's file is live (dedup key)
+  });
+
+  it('HYGIENE-2: no getPending/expire on the filer → no-op, empty set', () => {
+    expect([...expireStaleCards({ request: async () => undefined } as never)]).toEqual([]);
+  });
+});
 
 describe('resolveApplyTestPlan — scope the apply gate per file', () => {
   it('PLAN-1: runs the mirrored file-specific test when it exists', () => {

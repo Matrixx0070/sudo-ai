@@ -188,6 +188,26 @@ export class CheckpointProtocol {
     return decision;
   }
 
+  /**
+   * Force-resolve a pending checkpoint as EXPIRED (hygiene sweep — e.g. aged or
+   * stale code Deploy cards). Terminal like a decision but never counts as owner
+   * approval. Returns true if it was pending and got expired.
+   */
+  expire(checkpointId: string, reason = 'expired'): boolean {
+    const res = this.db.prepare(
+      "UPDATE checkpoints SET status='decided', decision='Expired', decided_by=?, decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='pending'",
+    ).run(reason, checkpointId);
+    if (res.changes === 0) return false;
+    const waiter = this.waiters.get(checkpointId);
+    if (waiter) {
+      clearTimeout(waiter.timer);
+      this.waiters.delete(checkpointId);
+      waiter.resolve({ checkpointId, decision: CHECKPOINT_HOLD, decided: false });
+    }
+    log.info({ checkpointId, reason }, 'Checkpoint expired (hygiene)');
+    return true;
+  }
+
   /** Route a raw callback-data string. True when it was a checkpoint tap. */
   handleCallback(data: string, decidedBy: string): boolean {
     const parsed = parseCheckpointCallback(data);
