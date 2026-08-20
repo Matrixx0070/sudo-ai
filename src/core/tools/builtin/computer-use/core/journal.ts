@@ -13,6 +13,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { createLogger } from '../../../../shared/logger.js';
+import { dataPath } from '../../../../shared/paths.js';
 import type { StepResult } from './types.js';
 
 const log = createLogger('computer:journal');
@@ -39,7 +40,7 @@ export class ActionJournal {
   constructor(
     private readonly sessionId: string,
     private readonly display: string,
-    baseDir = join(process.cwd(), 'data', 'computer-use'),
+    baseDir = dataPath('computer-use'),
   ) {
     // Sanitise sessionId for a filesystem path.
     const safe = sessionId.replace(/[^a-zA-Z0-9_.-]/g, '_');

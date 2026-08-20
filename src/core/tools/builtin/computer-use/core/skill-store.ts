@@ -17,6 +17,7 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createLogger } from '../../../../shared/logger.js';
+import { dataPath } from '../../../../shared/paths.js';
 import type { Action } from './types.js';
 
 const log = createLogger('computer:skills');
@@ -49,7 +50,7 @@ function normalise(subgoal: string): string[] {
 }
 
 export class SkillStore {
-  constructor(private readonly baseDir = join(process.cwd(), 'data', 'computer-use', 'skills')) {}
+  constructor(private readonly baseDir = dataPath('computer-use', 'skills')) {}
 
   private pathFor(id: string): string {
     return join(this.baseDir, `${id}.json`);

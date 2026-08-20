@@ -12,6 +12,7 @@
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { createLogger } from '../../../../shared/logger.js';
+import { dataPath } from '../../../../shared/paths.js';
 import type { Action, StepResult } from './types.js';
 import type { ActionExecutor } from './executor.js';
 
@@ -35,7 +36,7 @@ export interface PlanRunState {
 }
 
 export class PlanRunStore {
-  constructor(private readonly baseDir = join(process.cwd(), 'data', 'computer-use', 'runs')) {}
+  constructor(private readonly baseDir = dataPath('computer-use', 'runs')) {}
 
   private pathFor(runId: string): string {
     const safe = runId.replace(/[^a-zA-Z0-9_.-]/g, '_');
