@@ -17,7 +17,7 @@ beforeAll(async () => {
   const db = new Database(path.join(tmp, 'traces.db'));
   db.exec('CREATE TABLE traces (tool_name TEXT, success INTEGER, args_raw TEXT)');
   const ins = db.prepare('INSERT INTO traces (tool_name, success, args_raw) VALUES (?,?,?)');
-  ins.run('system.exec', 0, JSON.stringify({ command: 'grep foo | cat', target: 'repo' })); // genuine refusal
+  ins.run('system.exec', 0, JSON.stringify({ command: 'grep foo > out.txt', target: 'repo' })); // genuine refusal (redirect)
   ins.run('system.exec', 0, JSON.stringify({ command: 'pm2 restart x', target: 'repo' }));   // genuine refusal
   ins.run('system.exec', 0, JSON.stringify({ command: 'rg ok', target: 'repo' }));            // already-ok
   ins.run('system.exec', 0, JSON.stringify({ command: 'rg ok' }));                            // out of scope

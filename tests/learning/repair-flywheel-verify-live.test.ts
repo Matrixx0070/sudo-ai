@@ -21,7 +21,7 @@ const repair = makeExecRepoRepair();
 
 /** A fake "model": fixes a couple of known refused commands, else declares IMPOSSIBLE. */
 const fakeRewrite: LlmRewrite = async ({ original }) => {
-  if (original === 'grep foo | cat') return 'rg foo';
+  if (original === 'grep foo > out.txt') return 'rg foo';
   if (original === 'cat package.json') return 'ls package.json';
   return null; // pm2 restart, bash -lc, multi-step — correctly unrewritable
 };
@@ -43,7 +43,7 @@ describe('REPAIR_REGISTRY', () => {
     const alias = makeExecRepoRepair(undefined, 'exec');
     expect(alias.tool).toBe('exec');
     expect(alias.lessonId).not.toBe(makeExecRepoRepair().lessonId);
-    expect(alias.check('grep foo | cat').ok).toBe(false); // same true-to-prod guard
+    expect(alias.check('grep foo > out.txt').ok).toBe(false); // same true-to-prod guard
     expect(alias.check('rg foo').ok).toBe(true);
   });
 });
@@ -58,7 +58,7 @@ describe('makeExecRepoRepair — true-to-prod guard predicate', () => {
   it('check mirrors checkRepoCommand (allowlisted pass, metachar/non-allowlisted fail)', () => {
     expect(repair.check('rg foo').ok).toBe(true);          // allowlisted read
     expect(repair.check('git status').ok).toBe(true);
-    expect(repair.check('grep foo | cat').ok).toBe(false); // unquoted pipe
+    expect(repair.check('grep foo > out.txt').ok).toBe(false); // unquoted redirect
     expect(repair.check('pm2 restart sudo-ai-v5').ok).toBe(false); // restart not allowed
     // cat is allowlisted since the 2026-08-05 repo-exec ergonomics change; the
     // credential deny (not the command list) is what keeps secrets unreadable.
@@ -71,7 +71,7 @@ describe('makeExecRepoRepair — true-to-prod guard predicate', () => {
 describe('replayVerifyLive', () => {
   it('measures recovery over genuine refusals; already-ok and out-of-scope excluded', async () => {
     const inputs = [
-      { command: 'grep foo | cat', target: 'repo' },        // recoverable → rg foo
+      { command: 'grep foo > out.txt', target: 'repo' },     // recoverable → rg foo
       { command: 'cat package.json', target: 'repo' },       // now already ok (cat allowlisted)
       { command: 'pm2 restart sudo-ai-v5', target: 'repo' }, // IMPOSSIBLE
       { command: 'bash -lc "x; y"', target: 'repo' },        // IMPOSSIBLE
@@ -81,14 +81,14 @@ describe('replayVerifyLive', () => {
     const r = await replayVerifyLive(inputs, repair, fakeRewrite);
     expect(r.applicable).toBe(5);   // the 5 repo-target rows
     expect(r.alreadyOk).toBe(2);    // rg already-fine, cat package.json
-    expect(r.recovered).toBe(1);    // grep|cat → rg foo
+    expect(r.recovered).toBe(1);    // grep redirect → rg foo
     expect(r.impossible).toBe(2);   // pm2, bash
     expect(r.recoveryPct).toBe(33.3); // 1 / (5-2) genuine refusals
   });
 
   it('a rewrite that throws is fail-open (counts as not-recovered, never throws)', async () => {
     const boom: LlmRewrite = async () => { throw new Error('provider down'); };
-    const r = await replayVerifyLive([{ command: 'grep x | cat', target: 'repo' }], repair, boom);
+    const r = await replayVerifyLive([{ command: 'grep x > out.txt', target: 'repo' }], repair, boom);
     expect(r.recovered).toBe(0);
     expect(r.applicable).toBe(1);
   });
@@ -111,7 +111,7 @@ describe('replayVerifyLive', () => {
   });
 
   it('enough samples + high recovery → adopt', async () => {
-    const inputs = Array.from({ length: 22 }, () => ({ command: 'grep foo | cat', target: 'repo' }));
+    const inputs = Array.from({ length: 22 }, () => ({ command: 'grep foo > out.txt', target: 'repo' }));
     const r = await replayVerifyLive(inputs, repair, fakeRewrite, { maxEpisodes: 100 });
     expect(r.recovered).toBe(22);
     expect(decideLiveAdoption(r)).toBe('adopt');
@@ -120,9 +120,9 @@ describe('replayVerifyLive', () => {
 
 describe('prompt + reply parsing', () => {
   it('buildRewritePrompt carries the lesson, original, and reason', () => {
-    const p = buildRewritePrompt('LESSON-TEXT', 'grep foo | cat', 'shell operators not allowed');
+    const p = buildRewritePrompt('LESSON-TEXT', 'grep foo > out.txt', 'shell operators not allowed');
     expect(p).toContain('LESSON-TEXT');
-    expect(p).toContain('grep foo | cat');
+    expect(p).toContain('grep foo > out.txt');
     expect(p).toContain('shell operators not allowed');
     expect(p).toContain('IMPOSSIBLE');
   });
